@@ -551,6 +551,30 @@ nodes:
     assert "Set `target.shell_interactive: true` or use `bash -lic`." in result.stdout
 
 
+def test_inspect_command_accepts_interactive_bash_rcfile_wrapper(tmp_path):
+    pipeline_path = tmp_path / "pipeline.yaml"
+    pipeline_path.write_text(
+        """name: inspect-kimi-rcfile
+working_dir: .
+nodes:
+  - id: review
+    agent: claude
+    prompt: hi
+    target:
+      kind: local
+      shell: "bash --rcfile ~/.bashrc -ic '{command}'"
+      shell_init: kimi
+""",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["inspect", str(pipeline_path), "--output", "json-summary"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["nodes"][0].get("warnings") is None
+
+
 def test_inspect_command_json_summary_includes_kimi_shell_init_warning(tmp_path):
     pipeline_path = tmp_path / "pipeline.yaml"
     pipeline_path.write_text(
