@@ -10,7 +10,7 @@ from pathlib import Path
 import typer
 from agentflow.defaults import default_smoke_pipeline_path
 from agentflow.doctor import DoctorCheck, build_bash_login_shell_bridge_recommendation, build_local_smoke_doctor_report
-from agentflow.local_shell import kimi_shell_init_requires_interactive_bash_warning
+from agentflow.local_shell import kimi_shell_init_requires_interactive_bash_warning, shell_command_uses_kimi_helper
 
 app = typer.Typer(add_completion=False)
 
@@ -357,7 +357,7 @@ def _node_kimi_smoke_preflight_match(node: object) -> dict[str, str] | None:
     node_id = str(getattr(node, "id", None) or agent)
 
     shell_init = getattr(target, "shell_init", None)
-    if isinstance(shell_init, str) and "kimi" in shell_init.lower():
+    if shell_command_uses_kimi_helper(shell_init if isinstance(shell_init, str) else None):
         return {
             "node_id": node_id,
             "agent": agent,
@@ -365,7 +365,7 @@ def _node_kimi_smoke_preflight_match(node: object) -> dict[str, str] | None:
         }
 
     shell = getattr(target, "shell", None)
-    if isinstance(shell, str) and "kimi" in shell.lower():
+    if shell_command_uses_kimi_helper(shell if isinstance(shell, str) else None):
         return {
             "node_id": node_id,
             "agent": agent,

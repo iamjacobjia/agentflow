@@ -20,6 +20,17 @@ def _split_shell_parts(command: str | None) -> list[str]:
         return []
 
 
+def _is_command_flag(part: str) -> bool:
+    return part == "--command" or (part.startswith("-") and not part.startswith("--") and "c" in part[1:])
+
+
+def _looks_like_kimi_token(token: str) -> bool:
+    stripped = token.strip().lstrip("({[").rstrip(";|&)}]\n\r\t ")
+    if not stripped:
+        return False
+    return os.path.basename(stripped) == "kimi"
+
+
 def target_uses_bash(target: Any) -> bool:
     shell = _target_value(target, "shell")
     if not isinstance(shell, str) or not shell.strip():
@@ -61,8 +72,11 @@ def shell_command_uses_kimi_helper(command: str | None) -> bool:
     if not isinstance(command, str) or not command.strip():
         return False
 
-    for token in _split_shell_parts(command):
-        if os.path.basename(token) == "kimi":
+    tokens = _split_shell_parts(command)
+    for index, token in enumerate(tokens):
+        if _looks_like_kimi_token(token):
+            return True
+        if index > 0 and _is_command_flag(tokens[index - 1]) and shell_command_uses_kimi_helper(token):
             return True
     return False
 
