@@ -2642,6 +2642,50 @@ def test_check_local_uses_bundled_pipeline_by_default(monkeypatch):
     assert captured["wait_timeout"] is None
 
 
+def test_check_local_uses_json_doctor_output_when_run_output_is_json(monkeypatch):
+    class FakeOrchestrator:
+        async def submit(self, pipeline: object):
+            return SimpleNamespace(id="check-local-json")
+
+        async def wait(self, run_id: str, timeout: float | None = None):
+            return _completed_run(run_id, pipeline_name="local-real-agents-kimi-smoke")
+
+    monkeypatch.setattr(
+        agentflow.cli,
+        "build_local_smoke_doctor_report",
+        lambda: DoctorReport(
+            status="warning",
+            checks=[DoctorCheck(name="bash_login_startup", status="warning", detail="missing bridge")],
+        ),
+    )
+    monkeypatch.setattr(agentflow.cli, "build_bash_login_shell_bridge_recommendation", _shell_bridge_recommendation)
+    monkeypatch.setattr(
+        agentflow.cli,
+        "_build_runtime",
+        lambda runs_dir, max_concurrent_runs: (SimpleNamespace(run_dir=lambda run_id: Path(runs_dir) / run_id), FakeOrchestrator()),
+    )
+    monkeypatch.setattr(agentflow.cli, "default_smoke_pipeline_path", lambda: "examples/local-real-agents-kimi-smoke.yaml")
+    monkeypatch.setattr(agentflow.cli, "_load_pipeline", lambda path: object())
+
+    result = runner.invoke(app, ["check-local", "--output", "json", "--shell-bridge"])
+
+    assert result.exit_code == 0
+    assert json.loads(result.stderr) == {
+        "status": "warning",
+        "checks": [{"name": "bash_login_startup", "status": "warning", "detail": "missing bridge"}],
+        "pipeline": {
+            "auto_preflight": {
+                "enabled": True,
+                "reason": "path matches the bundled real-agent smoke pipeline.",
+                "matches": [],
+                "match_summary": [],
+            }
+        },
+        "shell_bridge": _shell_bridge_recommendation().as_dict(),
+    }
+    assert json.loads(result.stdout) == {"id": "check-local-json", "status": "completed"}
+
+
 def test_check_local_stops_when_doctor_fails(monkeypatch):
     bundled_path = str((Path.cwd() / "examples/local-real-agents-kimi-smoke.yaml").resolve())
 

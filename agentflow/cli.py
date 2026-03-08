@@ -994,9 +994,10 @@ def check_local(
     selected_path = path or default_smoke_pipeline_path()
     report, pipeline = _doctor_report_for_path(selected_path)
     recommendation = build_bash_login_shell_bridge_recommendation() if shell_bridge else None
+    doctor_output = _structured_output_from_run_output(output)
     _echo_doctor_report(
         report,
-        output=StructuredOutputFormat.SUMMARY,
+        output=doctor_output,
         err=True,
         include_shell_bridge=shell_bridge,
         shell_bridge=recommendation,
