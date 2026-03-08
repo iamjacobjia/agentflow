@@ -157,7 +157,20 @@ def _doctor_report():
     return build_local_smoke_doctor_report()
 
 
-def _echo_doctor_report(report: object, *, err: bool = False) -> None:
+def _render_doctor_summary(report: object) -> str:
+    lines = [f"Doctor: {_status_value(getattr(report, 'status', 'unknown'))}"]
+    for check in getattr(report, "checks", []) or []:
+        lines.append(
+            f"- {getattr(check, 'name', 'unknown')}: {_status_value(getattr(check, 'status', 'unknown'))}"
+            f" - {getattr(check, 'detail', '')}"
+        )
+    return "\n".join(lines)
+
+
+def _echo_doctor_report(report: object, *, output: RunOutputFormat = RunOutputFormat.JSON, err: bool = False) -> None:
+    if output == RunOutputFormat.SUMMARY:
+        typer.echo(_render_doctor_summary(report), err=err)
+        return
     typer.echo(json.dumps(report.as_dict(), indent=2), err=err)
 
 
@@ -232,9 +245,11 @@ def smoke(
 
 
 @app.command()
-def doctor() -> None:
+def doctor(
+    output: RunOutputFormat = typer.Option(RunOutputFormat.JSON, "--output", help="Result output format."),
+) -> None:
     report = _doctor_report()
-    _echo_doctor_report(report)
+    _echo_doctor_report(report, output=output)
     raise typer.Exit(code=0 if report.status != "failed" else 1)
 
 

@@ -490,6 +490,18 @@ def test_smoke_supports_json_output(monkeypatch):
 def test_doctor_outputs_json_report(monkeypatch):
     monkeypatch.setattr(agentflow.cli, "build_local_smoke_doctor_report", lambda: _doctor_report())
 
+    result = runner.invoke(app, ["doctor", "--output", "json"])
+
+    assert result.exit_code == 0
+    assert json.loads(result.stdout) == {
+        "status": "ok",
+        "checks": [{"name": "kimi_shell_helper", "status": "ok", "detail": "ready"}],
+    }
+
+
+def test_doctor_defaults_to_json_report(monkeypatch):
+    monkeypatch.setattr(agentflow.cli, "build_local_smoke_doctor_report", lambda: _doctor_report())
+
     result = runner.invoke(app, ["doctor"])
 
     assert result.exit_code == 0
@@ -497,6 +509,15 @@ def test_doctor_outputs_json_report(monkeypatch):
         "status": "ok",
         "checks": [{"name": "kimi_shell_helper", "status": "ok", "detail": "ready"}],
     }
+
+
+def test_doctor_supports_summary_output(monkeypatch):
+    monkeypatch.setattr(agentflow.cli, "build_local_smoke_doctor_report", lambda: _doctor_report())
+
+    result = runner.invoke(app, ["doctor", "--output", "summary"])
+
+    assert result.exit_code == 0
+    assert result.stdout == "Doctor: ok\n- kimi_shell_helper: ok - ready\n"
 
 
 def test_doctor_command_does_not_import_web_stack(monkeypatch):
