@@ -11,5 +11,5 @@ def test_bundled_smoke_pipeline_runs_both_agents_in_shared_kimi_bootstrap():
     assert codex_node.target.shell == "bash"
     assert codex_node.target.shell_login is True
     assert codex_node.target.shell_interactive is True
-    assert codex_node.target.shell_init == "kimi"
-    assert claude_node.target.shell_init == "kimi"
+    assert codex_node.target.shell_init == ["command -v kimi >/dev/null 2>&1", "kimi"]
+    assert claude_node.target.shell_init == ["command -v kimi >/dev/null 2>&1", "kimi"]

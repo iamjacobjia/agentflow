@@ -200,10 +200,12 @@ target:
   shell: bash
   shell_login: true
   shell_interactive: true
-  shell_init: kimi
+  shell_init:
+    - command -v kimi >/dev/null 2>&1
+    - kimi
 ```
 
-This runs the node inside `bash`, explicitly enables login and interactive startup files, executes `kimi`, and then launches the prepared agent command. It is useful for helper functions defined in `~/.bashrc`. If you prefer to spell the wrapper directly, explicit shells such as `bash -lic` behave the same way, and AgentFlow suppresses Bash's harmless no-job-control stderr noise for those interactive wrappers too. If your login shell uses `~/.bash_profile`, make sure it eventually reaches `~/.bashrc`, either directly or via another startup file such as `~/.profile`; otherwise Bash only reads `~/.profile` when no `~/.bash_profile` or `~/.bash_login` file is present. A minimal bridge looks like:
+This runs the node inside `bash`, explicitly enables login and interactive startup files, verifies `kimi` is available, executes it, and then launches the prepared agent command. `shell_init` accepts either a single command or a list of commands; list entries are joined with `&&` so bootstrap failures still stop the wrapped agent launch. It is useful for helper functions defined in `~/.bashrc` without forcing you to hand-write quoted shell templates. If you prefer to spell the wrapper directly, explicit shells such as `bash -lic` behave the same way, and AgentFlow suppresses Bash's harmless no-job-control stderr noise for those interactive wrappers too. If your login shell uses `~/.bash_profile`, make sure it eventually reaches `~/.bashrc`, either directly or via another startup file such as `~/.profile`; otherwise Bash only reads `~/.profile` when no `~/.bash_profile` or `~/.bash_login` file is present. A minimal bridge looks like:
 
 ```bash
 # ~/.bash_profile or ~/.profile

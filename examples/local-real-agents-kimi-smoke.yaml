@@ -10,7 +10,9 @@ nodes:
       shell: bash
       shell_login: true
       shell_interactive: true
-      shell_init: kimi
+      shell_init:
+        - command -v kimi >/dev/null 2>&1
+        - kimi
     prompt: |
       Reply with exactly: codex ok
     timeout_seconds: 180
@@ -27,7 +29,9 @@ nodes:
       shell: bash
       shell_login: true
       shell_interactive: true
-      shell_init: kimi
+      shell_init:
+        - command -v kimi >/dev/null 2>&1
+        - kimi
     prompt: |
       Reply with exactly: claude ok
     timeout_seconds: 180
