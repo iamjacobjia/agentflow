@@ -16,6 +16,9 @@ from agentflow.specs import PipelineSpec
 from agentflow.store import RunStore
 
 
+_TERMINAL_RUN_STATUSES = {"completed", "failed", "cancelled"}
+
+
 def _parse_pipeline_payload(payload: dict[str, Any]) -> PipelineSpec:
     try:
         if "yaml" in payload:
@@ -113,13 +116,16 @@ def create_app(*, store: RunStore | None = None, orchestrator: Orchestrator | No
 
         async def event_stream():
             try:
-                for cached in app.state.store.get_events(run_id):
+                cached_events = app.state.store.get_events(run_id)
+                for cached in cached_events:
                     yield f"data: {cached.model_dump_json()}\n\n"
+                if cached_events and cached_events[-1].type == "run_completed":
+                    return
                 while True:
                     event = await asyncio.to_thread(queue.get)
                     yield f"data: {event.model_dump_json()}\n\n"
                     run = app.state.store.get_run(run_id)
-                    if run.status.value in {"completed", "failed", "cancelled"} and event.type == "run_completed":
+                    if run.status.value in _TERMINAL_RUN_STATUSES and event.type == "run_completed":
                         break
             finally:
                 await app.state.store.unsubscribe(run_id, queue)
