@@ -14,15 +14,32 @@ from agentflow.store import RunStore
 app = typer.Typer(add_completion=False)
 
 
-@app.command()
-def serve(host: str = "127.0.0.1", port: int = 8000) -> None:
-    uvicorn.run(create_app(), host=host, port=port)
+def _build_runtime(runs_dir: str, max_concurrent_runs: int) -> tuple[RunStore, Orchestrator]:
+    store = RunStore(runs_dir)
+    orchestrator = Orchestrator(store=store, max_concurrent_runs=max_concurrent_runs)
+    return store, orchestrator
 
 
 @app.command()
-def run(path: str) -> None:
-    store = RunStore()
-    orchestrator = Orchestrator(store=store)
+def serve(
+    host: str = "127.0.0.1",
+    port: int = 8000,
+    runs_dir: str = ".agentflow/runs",
+    max_concurrent_runs: int = 2,
+) -> None:
+    store, orchestrator = _build_runtime(runs_dir, max_concurrent_runs)
+    uvicorn.run(create_app(store=store, orchestrator=orchestrator), host=host, port=port)
+
+
+@app.command()
+def validate(path: str) -> None:
+    pipeline = load_pipeline_from_path(path)
+    typer.echo(json.dumps(pipeline.model_dump(mode="json"), indent=2))
+
+
+@app.command()
+def run(path: str, runs_dir: str = ".agentflow/runs", max_concurrent_runs: int = 2) -> None:
+    store, orchestrator = _build_runtime(runs_dir, max_concurrent_runs)
     pipeline = load_pipeline_from_path(path)
 
     async def _run() -> None:

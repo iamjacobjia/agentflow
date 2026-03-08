@@ -1,24 +1,28 @@
 # AgentFlow
 
-AgentFlow is a Python orchestrator for `codex`, `claude`, and `kimi` agents that supports:
+AgentFlow is a Python orchestrator for `codex`, `claude`, and `kimi` agents with Airflow-style DAGs, parallel scheduling, multiple execution targets, and a live web console for traces and artifacts.
 
-- Airflow-like DAG definitions in Python and YAML
-- Parallel node execution with dependency-aware scheduling
-- Per-node model, provider, tools mode, MCP selection, and skills selection
-- Local, container, and AWS Lambda execution targets
-- Final-response or full-trace outputs per node
-- Success criteria such as output contains text, file exists, file contains text, and file non-empty
-- A FastAPI frontend that visualizes DAG runs and parsed JSONL traces in real time
+## Features
+
+- Airflow-like pipeline definitions in Python and YAML
+- Parallel DAG execution with dependency-aware scheduling
+- Per-node selection of model, provider, tools policy, MCP servers, and skills
+- Execution targets for local processes, containers, and AWS Lambda
+- Per-node output capture as either final response or full trace
+- Post-run success criteria including output contains text, file exists, file contains text, and file non-empty
+- Run queueing, retries, retry backoff, cancellation, rerun, and persisted run recovery
+- Web UI for DAG state, attempt history, JSONL trace parsing, stdout/stderr, and node artifacts
+- API endpoints for validation, launch, events, artifacts, cancel, rerun, and health checks
 
 ## Why this shape
 
-This project was built from scratch in this repo, and the integrations were informed by:
+This project was built in this repo, and the integrations were informed by:
 
-- OpenAI Codex CLI docs and source: `reference/codex`
-- Claude Code Telegram integration patterns: `reference/claude-code-telegram`
-- Moonshot's Kimi CLI wire protocol and web UI: `reference/kimi-cli`
+- OpenAI Codex CLI patterns in `reference/codex`
+- Claude Code web and stream patterns in `reference/claude-code-telegram`
+- Moonshot Kimi CLI protocol and UI patterns in `reference/kimi-cli`
 
-Those references drove the parser tolerances and the frontend event model.
+Those references shaped the trace parsers, adapter contracts, and frontend event model.
 
 ## Install
 
@@ -28,7 +32,21 @@ python3 -m venv .venv
 pip install -e .[dev]
 ```
 
-## Run the web app
+## Quick start
+
+Validate a pipeline:
+
+```bash
+agentflow validate examples/pipeline.yaml
+```
+
+Run a pipeline once:
+
+```bash
+agentflow run examples/pipeline.yaml
+```
+
+Run the web console:
 
 ```bash
 agentflow serve --host 127.0.0.1 --port 8000
@@ -36,10 +54,18 @@ agentflow serve --host 127.0.0.1 --port 8000
 
 Open `http://127.0.0.1:8000`.
 
-## Run a pipeline from YAML
+## Runtime configuration
+
+You can configure the runtime via CLI flags or environment variables.
+
+- `AGENTFLOW_RUNS_DIR`: base directory for run state and artifacts
+- `AGENTFLOW_MAX_CONCURRENT_RUNS`: maximum number of concurrently executing DAG runs
+
+CLI equivalents:
 
 ```bash
-agentflow run examples/pipeline.yaml
+agentflow serve --runs-dir .agentflow/runs --max-concurrent-runs 2
+agentflow run examples/pipeline.yaml --runs-dir .agentflow/runs --max-concurrent-runs 2
 ```
 
 ## Airflow-like Python DAG
@@ -70,6 +96,8 @@ with DAG("demo", working_dir=".", concurrency=3) as dag:
 spec = dag.to_spec()
 ```
 
+See `examples/airflow_like.py` for a complete runnable example.
+
 ## Pipeline schema
 
 Each node supports:
@@ -79,24 +107,30 @@ Each node supports:
 - `provider`: a string or a structured provider config with `base_url`, `api_key_env`, headers, and env
 - `tools`: `read_only` or `read_write`
 - `mcps`: a list of MCP server definitions
-- `skills`: a list of local skill file paths or names
+- `skills`: a list of local skill paths or names
 - `target`: `local`, `container`, or `aws_lambda`
 - `capture`: `final` or `trace`
-- `success_criteria`: output/file checks evaluated after execution
+- `retries` and `retry_backoff_seconds`
+- `success_criteria`: output or filesystem checks evaluated after execution
+
+Top-level pipeline controls include:
+
+- `concurrency`: max parallel nodes within a run
+- `fail_fast`: skip downstream work after the first failed node
 
 ## Execution targets
 
 ### Local
 
-Runs the agent command directly on the host.
+Runs the prepared agent command directly on the host.
 
 ### Container
 
-Wraps the command in `docker run`, mounts the working directory, runtime directory, and the AgentFlow app, then streams stdout/stderr back into the run trace.
+Wraps the command in `docker run`, mounts the working directory, runtime directory, and the AgentFlow app, then streams stdout and stderr back into the run trace.
 
 ### AWS Lambda
 
-Invokes `agentflow.remote.lambda_handler.handler`. The payload contains the prepared command, env, and runtime files. This is suitable for remote execution where the Lambda package includes AgentFlow and the agent executable.
+Invokes `agentflow.remote.lambda_handler.handler`. The payload contains the prepared command, environment, runtime files, and execution metadata so the Lambda package can execute the node remotely.
 
 ## Agent notes
 
@@ -119,11 +153,51 @@ Invokes `agentflow.remote.lambda_handler.handler`. The payload contains the prep
 - Calls Moonshot's OpenAI-compatible chat completions API
 - Provides a small built-in tool layer for read, search, write, and shell actions
 
-## Tests
+## Web console
+
+The frontend shows:
+
+- current DAG state and node statuses
+- live run timeline and parsed JSONL trace events
+- per-node attempts and retry history
+- final outputs plus stdout, stderr, trace, and result artifacts
+- controls to validate, launch, cancel, and rerun pipelines
+
+Artifact files are persisted under `AGENTFLOW_RUNS_DIR/<run_id>/artifacts/<node_id>/`.
+
+## API surface
+
+The FastAPI app exposes:
+
+- `POST /api/runs/validate`
+- `POST /api/runs`
+- `GET /api/runs`
+- `GET /api/runs/{run_id}`
+- `GET /api/runs/{run_id}/events`
+- `GET /api/runs/{run_id}/stream`
+- `GET /api/runs/{run_id}/artifacts/{node_id}/{name}`
+- `POST /api/runs/{run_id}/cancel`
+- `POST /api/runs/{run_id}/rerun`
+- `GET /api/health`
+
+## Testing
+
+Run the Python suite:
 
 ```bash
-pytest
+. .venv/bin/activate
+pytest -q
 ```
+
+Run the browser suite:
+
+```bash
+npm install
+npx playwright install chromium
+npx playwright test
+```
+
+The Playwright tests use lightweight mock `codex` and `claude` executables under `tests/e2e/bin/` and exercise validation, retries, rerun, cancellation, and artifact viewing through the web UI.
 
 ## Reference sources
 
