@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 
@@ -653,6 +654,32 @@ def test_local_smoke_doctor_report_redacts_sensitive_unknown_codex_stderr(tmp_pa
     }
 
 
+def test_local_smoke_doctor_report_warns_when_login_file_is_unreadable(tmp_path: Path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    login_file = home / ".bash_profile"
+    login_file.write_text('if [ -f "$HOME/.bashrc" ]; then . "$HOME/.bashrc"; fi\n', encoding="utf-8")
+    os.chmod(login_file, 0)
+
+    monkeypatch.setattr("agentflow.doctor.shutil.which", lambda name: f"/tmp/{name}")
+    monkeypatch.setattr(
+        "agentflow.doctor.subprocess.run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(args=args[0], returncode=11, stdout="", stderr=""),
+    )
+
+    report = build_local_smoke_doctor_report(home=home)
+
+    assert report.status == "failed"
+    assert report.as_dict()["checks"][2] == {
+        "name": "bash_login_startup",
+        "status": "warning",
+        "detail": (
+            "Bash login shells use `~/.bash_profile`, but AgentFlow could not read `~/.bash_profile` while "
+            "checking whether login shells reach `~/.bashrc`: Permission denied."
+        ),
+    }
+
+
 def test_shell_bridge_recommendation_targets_profile_when_no_login_file_exists(tmp_path: Path):
     home = tmp_path / "home"
     home.mkdir()
@@ -735,3 +762,25 @@ def test_shell_bridge_recommendation_is_none_when_custom_home_bridge_reaches_bas
     recommendation = build_bash_login_shell_bridge_recommendation(home=home)
 
     assert recommendation is None
+
+
+def test_shell_bridge_recommendation_handles_unreadable_login_file(tmp_path: Path):
+    home = tmp_path / "home"
+    home.mkdir()
+    login_file = home / ".bash_profile"
+    login_file.write_text('export PATH="$HOME/bin:$PATH"\n', encoding="utf-8")
+    os.chmod(login_file, 0)
+
+    recommendation = build_bash_login_shell_bridge_recommendation(home=home)
+
+    assert recommendation is not None
+    assert recommendation.as_dict() == {
+        "target": "~/.bash_profile",
+        "source": "~/.bashrc",
+        "snippet": 'if [ -f "$HOME/.bashrc" ]; then\n  . "$HOME/.bashrc"\nfi\n',
+        "reason": (
+            "Bash login shells use `~/.bash_profile`, but AgentFlow could not read `~/.bash_profile` while "
+            "checking whether login shells reach `~/.bashrc`: Permission denied. Add a direct bridge to the active "
+            "login file."
+        ),
+    }
