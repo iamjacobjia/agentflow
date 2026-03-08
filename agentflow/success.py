@@ -12,6 +12,25 @@ from agentflow.specs import (
 )
 
 
+def _read_success_text(path: Path) -> str | None:
+    try:
+        return path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+
+
+def _has_nonempty_contents(path: Path) -> bool:
+    text = _read_success_text(path)
+    if text is not None:
+        return text.strip() != ""
+    try:
+        return path.read_bytes().strip() != b""
+    except OSError:
+        return False
+
+
 def evaluate_success(node: NodeSpec, result: NodeResult, working_dir: Path) -> tuple[bool, list[str]]:
     if not node.success_criteria:
         return True, ["no success criteria configured"]
@@ -31,14 +50,14 @@ def evaluate_success(node: NodeSpec, result: NodeResult, working_dir: Path) -> t
             messages.append(f"file_exists({criterion.path})={ok}")
         elif isinstance(criterion, FileContainsCriterion):
             path = working_dir / criterion.path
-            contents = path.read_text(encoding="utf-8") if path.exists() else ""
-            haystack = contents if criterion.case_sensitive else contents.lower()
+            contents = _read_success_text(path) if path.exists() else None
+            haystack = contents if criterion.case_sensitive or contents is None else contents.lower()
             needle = criterion.value if criterion.case_sensitive else criterion.value.lower()
-            ok = path.exists() and needle in haystack
+            ok = contents is not None and needle in haystack
             messages.append(f"file_contains({criterion.path}, {criterion.value!r})={ok}")
         elif isinstance(criterion, FileNonEmptyCriterion):
             path = working_dir / criterion.path
-            ok = path.exists() and path.read_text(encoding="utf-8").strip() != ""
+            ok = path.exists() and _has_nonempty_contents(path)
             messages.append(f"file_nonempty({criterion.path})={ok}")
         else:
             ok = False
