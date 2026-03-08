@@ -353,7 +353,7 @@ nodes:
             "tools": "read_only",
             "capture": "final",
             "provider": "kimi, key=ANTHROPIC_API_KEY, url=https://api.kimi.com/coding/",
-            "auth": "`ANTHROPIC_API_KEY` via current environment; `target.shell_init` (`kimi` helper) also runs before launch",
+            "auth": "`ANTHROPIC_API_KEY` via `target.shell_init` (`kimi` helper)",
             "bootstrap": "shell=bash, login=true, interactive=true, init=kimi",
             "prompt_preview": "Reply with exactly: claude ok",
             "prepared_command": "claude -p 'Reply with exactly: claude ok' --output-format stream-json --verbose --permission-mode bypassPermissions --tools Read,Glob,Grep,LS,NotebookRead,Task,TaskOutput,TodoRead,WebFetch,WebSearch",

@@ -211,6 +211,19 @@ def _kimi_helper_bootstrap_source(target: object) -> tuple[str, str] | None:
     return None
 
 
+def _helper_bootstrap_is_primary_auth_source(
+    node: NodeSpec,
+    resolved_provider: object,
+    api_key_env: str,
+    helper_bootstrap_source: tuple[str, str] | None,
+) -> bool:
+    if helper_bootstrap_source is None:
+        return False
+    if api_key_env != "ANTHROPIC_API_KEY":
+        return False
+    return provider_uses_kimi_anthropic_auth(resolved_provider)
+
+
 def _auth_summary(node: NodeSpec, resolved_provider: object) -> str | None:
     api_key_env, provider_name = _resolved_auth_requirement(node)
     if not api_key_env:
@@ -241,6 +254,9 @@ def _auth_summary(node: NodeSpec, resolved_provider: object) -> str | None:
 
     if explicit_bootstrap_source is not None:
         return _format_auth_source_summary(api_key_env, explicit_bootstrap_source, helper_bootstrap_source)
+
+    if _helper_bootstrap_is_primary_auth_source(node, resolved_provider, api_key_env, helper_bootstrap_source):
+        return _format_auth_source_summary(api_key_env, helper_bootstrap_source)
 
     if _has_nonempty_env_value(node.env, api_key_env):
         return _format_auth_source_summary(
