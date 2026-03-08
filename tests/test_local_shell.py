@@ -289,7 +289,7 @@ def test_kimi_shell_init_requires_interactive_bash_warning_explains_explicit_bas
     )
 
 
-def test_kimi_shell_init_requires_interactive_bash_warning_keeps_generic_warning_without_detected_bashrc_guard(
+def test_kimi_shell_init_requires_interactive_bash_warning_accepts_explicit_bashrc_source_without_guard(
     tmp_path: Path,
 ):
     home = tmp_path / "home"
@@ -300,10 +300,7 @@ def test_kimi_shell_init_requires_interactive_bash_warning_keeps_generic_warning
         "shell": "bash -lc 'source ~/.bashrc && kimi && {command}'",
     }
 
-    assert kimi_shell_init_requires_interactive_bash_warning(target, home=home) == (
-        "`target.shell` uses `kimi` with bash without interactive startup; helpers from `~/.bashrc` are usually "
-        "unavailable. Add `-i`, set `target.shell_interactive: true`, or use `bash -lic`."
-    )
+    assert kimi_shell_init_requires_interactive_bash_warning(target, home=home) is None
 
 
 def test_kimi_shell_init_requires_interactive_bash_warning_accepts_wrapper_that_sources_profile_with_kimi(

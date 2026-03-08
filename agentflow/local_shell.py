@@ -324,11 +324,86 @@ def shell_command_prefixes_env_var(command: str | None, env_var: str) -> bool:
 
 def _resolve_shell_path(path: str, *, home: Path | None = None) -> Path:
     resolved_home = (home or Path.home()).expanduser()
-    expanded = _HOME_REFERENCE_PATTERN.sub(str(resolved_home), path.strip())
-    expanded = os.path.expanduser(expanded)
+    normalized = path.strip()
+    if normalized == "~":
+        expanded = str(resolved_home)
+    elif normalized.startswith("~/"):
+        expanded = str(resolved_home / normalized[2:])
+    else:
+        expanded = _HOME_REFERENCE_PATTERN.sub(str(resolved_home), normalized)
+        expanded = os.path.expanduser(expanded)
     candidate = Path(expanded)
     if not candidate.is_absolute():
         candidate = Path.cwd() / candidate
+    return candidate
+
+
+def _strip_shell_comments(line: str) -> str:
+    quote: str | None = None
+    escaped = False
+    result: list[str] = []
+    for char in line:
+        if escaped:
+            result.append(char)
+            escaped = False
+            continue
+        if char == "\\" and quote != "'":
+            result.append(char)
+            escaped = True
+            continue
+        if char in {'"', "'"}:
+            result.append(char)
+            if quote == char:
+                quote = None
+            elif quote is None:
+                quote = char
+            continue
+        if char == "#" and quote is None:
+            break
+        result.append(char)
+    return "".join(result)
+
+
+def _iter_shell_source_targets(text: str) -> tuple[str, ...]:
+    targets: list[str] = []
+    for raw_line in text.splitlines():
+        line = _strip_shell_comments(raw_line).strip()
+        if not line:
+            continue
+        try:
+            tokens = shlex.split(line, posix=True)
+        except ValueError:
+            tokens = line.split()
+        for index, token in enumerate(tokens[:-1]):
+            if token in {"source", "."}:
+                targets.append(tokens[index + 1])
+    return tuple(targets)
+
+
+def _resolve_home_shell_source_target(token: str, home: Path) -> Path | None:
+    normalized = token.rstrip(";)")
+    if not normalized:
+        return None
+
+    resolved_home = home.resolve()
+    if normalized.startswith("~/"):
+        candidate = resolved_home / normalized[2:]
+    elif normalized.startswith("$HOME/"):
+        candidate = resolved_home / normalized[6:]
+    elif normalized.startswith("${HOME}/"):
+        candidate = resolved_home / normalized[8:]
+    elif normalized.startswith("$"):
+        return None
+    else:
+        raw_path = Path(normalized)
+        candidate = raw_path if raw_path.is_absolute() else resolved_home / raw_path
+
+    candidate = Path(os.path.normpath(str(candidate)))
+
+    try:
+        candidate.relative_to(resolved_home)
+    except ValueError:
+        return None
     return candidate
 
 
@@ -357,6 +432,39 @@ def _shell_file_defines_function(path: Path, function_name: str) -> bool:
     return _shell_text_defines_function(text, function_name)
 
 
+def _shell_file_loads_function(
+    path: Path,
+    function_name: str,
+    *,
+    home: Path | None = None,
+    visited: set[Path] | None = None,
+) -> bool:
+    resolved_path = Path(os.path.normpath(str(path.resolve(strict=False))))
+    seen = visited or set()
+    if resolved_path in seen:
+        return False
+    seen.add(resolved_path)
+
+    text = _read_shell_file_text(path)
+    if text is None:
+        return False
+
+    if path.name == ".bashrc" and _shell_text_returns_early_for_noninteractive_bash(text):
+        return False
+
+    if _shell_text_defines_function(text, function_name):
+        return True
+
+    resolved_home = (home or Path.home()).expanduser()
+    for token in _iter_shell_source_targets(text):
+        target = _resolve_home_shell_source_target(token, resolved_home)
+        if target is None:
+            continue
+        if _shell_file_loads_function(target, function_name, home=resolved_home, visited=seen):
+            return True
+    return False
+
+
 def _shell_command_loads_kimi_from_bash_env(command: str | None, *, home: Path | None = None) -> bool:
     bash_env = _shell_command_prefix_env_value_for_target(command, "BASH_ENV", "bash")
     if not bash_env:
@@ -367,6 +475,87 @@ def _shell_command_loads_kimi_from_bash_env(command: str | None, *, home: Path |
     if _shell_text_returns_early_for_noninteractive_bash(text):
         return False
     return _shell_text_defines_function(text, "kimi")
+
+
+def _shell_command_loads_function_from_sourced_file_before_target(
+    command: str | None,
+    function_name: str,
+    target: str,
+    *,
+    home: Path | None = None,
+) -> bool:
+    if not isinstance(command, str) or not command.strip() or not function_name or not target:
+        return False
+
+    tokens = _split_shell_parts(command)
+    expects_command = True
+    prefix_allows_options = False
+    active_command: str | None = None
+    loaded_function = False
+    for index, token in enumerate(tokens):
+        if active_command in _BASHRC_SOURCE_COMMANDS:
+            target_path = _resolve_shell_path(token, home=home)
+            if _shell_file_loads_function(target_path, function_name, home=home):
+                loaded_function = True
+
+        if expects_command and _normalize_shell_token(token) == target:
+            return loaded_function
+
+        if index > 0 and _is_command_flag(tokens[index - 1]) and _shell_command_loads_function_from_sourced_file_before_target(
+            token,
+            function_name,
+            target,
+            home=home,
+        ):
+            return True
+
+        if expects_command:
+            if token in _COMMAND_POSITION_PREFIX_TOKENS:
+                prefix_allows_options = True
+                continue
+            if _looks_like_env_assignment(token):
+                continue
+            if prefix_allows_options and (token == "--" or token.startswith("-")):
+                continue
+            expects_command = False
+            prefix_allows_options = False
+            active_command = os.path.basename(token)
+        if _token_resets_command_position(token):
+            expects_command = True
+            prefix_allows_options = False
+            active_command = None
+    return False
+
+
+def _shell_command_loads_function_from_sourced_file(
+    command: str | None,
+    function_name: str,
+    *,
+    home: Path | None = None,
+) -> bool:
+    placeholder = "__AGENTFLOW_SOURCED_FUNCTION_TARGET__"
+    return _shell_command_loads_function_from_sourced_file_before_target(
+        f"{command} && {placeholder}" if isinstance(command, str) and command.strip() else command,
+        function_name,
+        placeholder,
+        home=home,
+    )
+
+
+def _shell_command_loads_kimi_from_sourced_file_before_kimi(command: str | None, *, home: Path | None = None) -> bool:
+    return _shell_command_loads_function_from_sourced_file_before_target(command, "kimi", "kimi", home=home)
+
+
+def _shell_template_loads_kimi_from_sourced_file_before_command(shell: str | None, *, home: Path | None = None) -> bool:
+    if not isinstance(shell, str) or "{command}" not in shell:
+        return False
+    placeholder = "__AGENTFLOW_COMMAND_PLACEHOLDER__"
+    return _shell_command_loads_function_from_sourced_file_before_target(
+        shell.replace("{command}", placeholder),
+        "kimi",
+        placeholder,
+        home=home,
+    )
 
 
 def _shell_command_sources_bashrc_before_target(command: str | None, target: str) -> bool:
@@ -457,6 +646,18 @@ def shell_init_sources_bashrc_before_kimi(shell_init: Any) -> bool:
             return sourced_bashrc
         if shell_command_sources_bashrc(command):
             sourced_bashrc = True
+    return False
+
+
+def _shell_init_loads_kimi_from_sourced_file_before_kimi(shell_init: Any, *, home: Path | None = None) -> bool:
+    loaded_kimi = False
+    for command in shell_init_commands(shell_init):
+        if _shell_command_loads_kimi_from_sourced_file_before_kimi(command, home=home):
+            return True
+        if shell_command_uses_kimi_helper(command):
+            return loaded_kimi
+        if _shell_command_loads_function_from_sourced_file(command, "kimi", home=home):
+            loaded_kimi = True
     return False
 
 
@@ -757,6 +958,10 @@ def kimi_shell_init_requires_interactive_bash_warning(target: Any, *, home: Path
         return None
     guarded_bashrc = bashrc_returns_early_for_noninteractive_shell(home)
     if shell_init_uses_kimi_helper(shell_init):
+        if _shell_template_loads_kimi_from_sourced_file_before_command(shell if isinstance(shell, str) else None, home=home):
+            return None
+        if _shell_init_loads_kimi_from_sourced_file_before_kimi(shell_init, home=home):
+            return None
         if guarded_bashrc:
             if shell_template_sources_bashrc_before_command(shell if isinstance(shell, str) else None):
                 return _explicit_bashrc_shell_init_warning("target.shell")
@@ -765,6 +970,8 @@ def kimi_shell_init_requires_interactive_bash_warning(target: Any, *, home: Path
         return _kimi_bootstrap_without_interactive_bash_warning("target.shell_init")
 
     if shell_command_uses_kimi_helper(shell if isinstance(shell, str) else None):
+        if _shell_command_loads_kimi_from_sourced_file_before_kimi(shell, home=home):
+            return None
         if guarded_bashrc and shell_command_sources_bashrc_before_kimi(shell):
             return _explicit_bashrc_kimi_warning("target.shell")
         return _kimi_bootstrap_without_interactive_bash_warning("target.shell")
