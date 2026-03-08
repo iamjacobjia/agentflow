@@ -72,14 +72,37 @@ def _normalized_provider_base_url(value: str | None) -> str | None:
     return stripped.rstrip("/")
 
 
+def _normalized_provider_env_text(provider: ProviderConfig, key: str) -> str | None:
+    raw_value = provider.env.get(key)
+    if raw_value is None:
+        return None
+    stripped = str(raw_value).strip()
+    if not stripped:
+        return None
+    return stripped
+
+
+def _normalized_provider_env_base_url(provider: ProviderConfig, key: str) -> str | None:
+    return _normalized_provider_base_url(_normalized_provider_env_text(provider, key))
+
+
 def provider_uses_kimi_anthropic_auth(provider: ProviderConfig | None) -> bool:
     if provider is None:
         return False
-    if (provider.api_key_env or "").strip() != "ANTHROPIC_API_KEY":
+
+    configured_api_key_env = (provider.api_key_env or "").strip()
+    if not configured_api_key_env and _normalized_provider_env_text(provider, "ANTHROPIC_API_KEY") is not None:
+        configured_api_key_env = "ANTHROPIC_API_KEY"
+    if configured_api_key_env != "ANTHROPIC_API_KEY":
         return False
-    if (provider.name or "").strip().lower() == "kimi":
-        return True
-    return _normalized_provider_base_url(provider.base_url) == _KIMI_ANTHROPIC_BASE_URL.rstrip("/")
+
+    effective_base_url = _normalized_provider_env_base_url(provider, "ANTHROPIC_BASE_URL")
+    if effective_base_url is None:
+        effective_base_url = _normalized_provider_base_url(provider.base_url)
+    if effective_base_url is not None:
+        return effective_base_url == _KIMI_ANTHROPIC_BASE_URL.rstrip("/")
+
+    return (provider.name or "").strip().lower() == "kimi"
 
 
 def resolve_provider(value: str | ProviderConfig | None, agent: AgentKind) -> ProviderConfig | None:
