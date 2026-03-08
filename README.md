@@ -246,7 +246,7 @@ Run a real local smoke check with your installed CLIs:
 agentflow smoke
 ```
 
-This keeps the check small while exercising both local `codex` and local `claude` end-to-end. Before the bundled smoke pipeline starts, AgentFlow runs a local preflight that verifies `codex`, confirms that `bash -lic` can find the `kimi` shell helper and still launch `claude` afterwards, checks that `kimi` exports `ANTHROPIC_API_KEY` for Claude-on-Kimi, and reports which bash login startup file is active, including transitive bridges such as `~/.bash_profile` -> `~/.profile` -> `~/.bashrc`. If `claude` only becomes available inside that login shell bootstrap, the preflight reports a warning instead of blocking the bundled smoke run.
+This keeps the check small while exercising both local `codex` and local `claude` end-to-end. Before the bundled smoke pipeline starts, AgentFlow runs a local preflight that verifies `codex`, confirms that `bash -lic` can find the `kimi` shell helper and still launch `claude` afterwards, checks that `kimi` exports `ANTHROPIC_API_KEY` for Claude-on-Kimi, and reports which bash login startup file is active, including transitive bridges such as `~/.bash_profile` -> `~/.profile` -> `~/.bashrc`. The preflight also warns when a login startup file references `~/.bashrc` but that file is missing, or when no bash login startup file exists to bridge into `~/.bashrc` at all. If `claude` only becomes available inside that login shell bootstrap, the preflight reports a warning instead of blocking the bundled smoke run.
 
 You can run the same preflight directly:
 
