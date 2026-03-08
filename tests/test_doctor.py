@@ -171,6 +171,35 @@ def test_local_smoke_doctor_report_follows_transitive_absolute_home_bridge(tmp_p
     }
 
 
+def test_local_smoke_doctor_report_keeps_custom_home_bridge_when_kimi_fails(tmp_path: Path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".bash_profile").write_text(
+        'if [ -f "$HOME/.bash_agentflow" ]; then . "$HOME/.bash_agentflow"; fi\n',
+        encoding="utf-8",
+    )
+    (home / ".bash_agentflow").write_text(
+        'if [ -f "$HOME/.bashrc" ]; then . "$HOME/.bashrc"; fi\n',
+        encoding="utf-8",
+    )
+    (home / ".bashrc").write_text("# bridge present\n", encoding="utf-8")
+
+    monkeypatch.setattr("agentflow.doctor.shutil.which", lambda name: f"/tmp/{name}")
+    monkeypatch.setattr(
+        "agentflow.doctor.subprocess.run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(args=args[0], returncode=11, stdout="", stderr=""),
+    )
+
+    report = build_local_smoke_doctor_report(home=home)
+
+    assert report.status == "failed"
+    assert report.as_dict()["checks"][2] == {
+        "name": "bash_login_startup",
+        "status": "ok",
+        "detail": "Bash login shells use `~/.bash_profile`, and it reaches `~/.bashrc` via `~/.bash_agentflow`.",
+    }
+
+
 def test_local_smoke_doctor_report_accepts_runtime_ready_shell_when_referenced_bashrc_is_missing(tmp_path: Path, monkeypatch):
     home = tmp_path / "home"
     home.mkdir()
@@ -683,6 +712,24 @@ def test_shell_bridge_recommendation_is_none_when_login_chain_already_reaches_ba
     home = tmp_path / "home"
     home.mkdir()
     (home / ".profile").write_text('if [ -f "$HOME/.bashrc" ]; then . "$HOME/.bashrc"; fi\n', encoding="utf-8")
+    (home / ".bashrc").write_text("kimi(){ :; }\n", encoding="utf-8")
+
+    recommendation = build_bash_login_shell_bridge_recommendation(home=home)
+
+    assert recommendation is None
+
+
+def test_shell_bridge_recommendation_is_none_when_custom_home_bridge_reaches_bashrc(tmp_path: Path):
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".bash_profile").write_text(
+        'if [ -f "$HOME/.bash_agentflow" ]; then . "$HOME/.bash_agentflow"; fi\n',
+        encoding="utf-8",
+    )
+    (home / ".bash_agentflow").write_text(
+        'if [ -f "$HOME/.bashrc" ]; then . "$HOME/.bashrc"; fi\n',
+        encoding="utf-8",
+    )
     (home / ".bashrc").write_text("kimi(){ :; }\n", encoding="utf-8")
 
     recommendation = build_bash_login_shell_bridge_recommendation(home=home)
