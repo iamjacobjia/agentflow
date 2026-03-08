@@ -31,6 +31,15 @@ def _doctor_report(status: str = "ok", detail: str = "ready") -> DoctorReport:
     )
 
 
+def _shell_bridge_recommendation() -> ShellBridgeRecommendation:
+    return ShellBridgeRecommendation(
+        target="~/.bash_profile",
+        source="~/.profile",
+        snippet='if [ -f "$HOME/.profile" ]; then\n  . "$HOME/.profile"\nfi\n',
+        reason="Bash login shells use `~/.bash_profile`, so `~/.profile` never runs.",
+    )
+
+
 def _completed_run(
     run_id: str,
     *,
@@ -785,6 +794,45 @@ def test_smoke_runs_when_bundled_preflight_warns(monkeypatch):
     assert captured["wait_timeout"] is None
 
 
+def test_smoke_warn_preflight_includes_shell_bridge_summary_when_available(monkeypatch):
+    class FakeOrchestrator:
+        async def submit(self, pipeline: object):
+            return SimpleNamespace(id="smoke-warning-shell-bridge")
+
+        async def wait(self, run_id: str, timeout: float | None = None):
+            return _completed_run(run_id, pipeline_name="local-real-agents-kimi-smoke")
+
+    monkeypatch.setattr(
+        agentflow.cli,
+        "build_local_smoke_doctor_report",
+        lambda: DoctorReport(
+            status="warning",
+            checks=[DoctorCheck(name="bash_login_startup", status="warning", detail="missing bridge")],
+        ),
+    )
+    monkeypatch.setattr(agentflow.cli, "build_bash_login_shell_bridge_recommendation", _shell_bridge_recommendation)
+    monkeypatch.setattr(
+        agentflow.cli,
+        "_build_runtime",
+        lambda runs_dir, max_concurrent_runs: (SimpleNamespace(run_dir=lambda run_id: Path(runs_dir) / run_id), FakeOrchestrator()),
+    )
+    monkeypatch.setattr(agentflow.cli, "default_smoke_pipeline_path", lambda: "examples/local-real-agents-kimi-smoke.yaml")
+    monkeypatch.setattr(agentflow.cli, "_load_pipeline", lambda path: object())
+
+    result = runner.invoke(app, ["smoke"])
+
+    assert result.exit_code == 0
+    assert result.stderr == (
+        "Doctor: warning\n"
+        "- bash_login_startup: warning - missing bridge\n"
+        "Shell bridge suggestion for `~/.bash_profile` from `~/.profile`:\n"
+        "Reason: Bash login shells use `~/.bash_profile`, so `~/.profile` never runs.\n"
+        "if [ -f \"$HOME/.profile\" ]; then\n"
+        "  . \"$HOME/.profile\"\n"
+        "fi\n"
+    )
+
+
 def test_smoke_warn_preflight_honors_json_output(monkeypatch):
     class FakeOrchestrator:
         async def submit(self, pipeline: object):
@@ -815,6 +863,41 @@ def test_smoke_warn_preflight_honors_json_output(monkeypatch):
     assert json.loads(result.stderr) == {
         "status": "warning",
         "checks": [{"name": "claude", "status": "warning", "detail": "bootstrap-only"}],
+    }
+
+
+def test_smoke_warn_preflight_includes_shell_bridge_json_when_available(monkeypatch):
+    class FakeOrchestrator:
+        async def submit(self, pipeline: object):
+            return SimpleNamespace(id="smoke-warning-json-shell-bridge")
+
+        async def wait(self, run_id: str, timeout: float | None = None):
+            return _completed_run(run_id, pipeline_name="local-real-agents-kimi-smoke")
+
+    monkeypatch.setattr(
+        agentflow.cli,
+        "build_local_smoke_doctor_report",
+        lambda: DoctorReport(
+            status="warning",
+            checks=[DoctorCheck(name="bash_login_startup", status="warning", detail="missing bridge")],
+        ),
+    )
+    monkeypatch.setattr(agentflow.cli, "build_bash_login_shell_bridge_recommendation", _shell_bridge_recommendation)
+    monkeypatch.setattr(
+        agentflow.cli,
+        "_build_runtime",
+        lambda runs_dir, max_concurrent_runs: (SimpleNamespace(run_dir=lambda run_id: Path(runs_dir) / run_id), FakeOrchestrator()),
+    )
+    monkeypatch.setattr(agentflow.cli, "default_smoke_pipeline_path", lambda: "examples/local-real-agents-kimi-smoke.yaml")
+    monkeypatch.setattr(agentflow.cli, "_load_pipeline", lambda path: object())
+
+    result = runner.invoke(app, ["smoke", "--output", "json"])
+
+    assert result.exit_code == 0
+    assert json.loads(result.stderr) == {
+        "status": "warning",
+        "checks": [{"name": "bash_login_startup", "status": "warning", "detail": "missing bridge"}],
+        "shell_bridge": _shell_bridge_recommendation().as_dict(),
     }
 
 
@@ -1295,6 +1378,37 @@ def test_smoke_stops_when_bundled_preflight_fails(monkeypatch):
     assert result.stdout == "Doctor: failed\n- kimi_shell_helper: failed - missing\n"
 
 
+def test_smoke_failed_preflight_includes_shell_bridge_when_available(monkeypatch):
+    monkeypatch.setattr(
+        agentflow.cli,
+        "build_local_smoke_doctor_report",
+        lambda: DoctorReport(
+            status="failed",
+            checks=[
+                DoctorCheck(name="bash_login_startup", status="warning", detail="missing bridge"),
+                DoctorCheck(name="kimi_shell_helper", status="failed", detail="missing"),
+            ],
+        ),
+    )
+    monkeypatch.setattr(agentflow.cli, "build_bash_login_shell_bridge_recommendation", _shell_bridge_recommendation)
+    monkeypatch.setattr(agentflow.cli, "default_smoke_pipeline_path", lambda: "examples/local-real-agents-kimi-smoke.yaml")
+    monkeypatch.setattr(agentflow.cli, "_load_pipeline", lambda path: (_ for _ in ()).throw(AssertionError("pipeline should not load")))
+
+    result = runner.invoke(app, ["smoke"])
+
+    assert result.exit_code == 1
+    assert result.stdout == (
+        "Doctor: failed\n"
+        "- bash_login_startup: warning - missing bridge\n"
+        "- kimi_shell_helper: failed - missing\n"
+        "Shell bridge suggestion for `~/.bash_profile` from `~/.profile`:\n"
+        "Reason: Bash login shells use `~/.bash_profile`, so `~/.profile` never runs.\n"
+        "if [ -f \"$HOME/.profile\" ]; then\n"
+        "  . \"$HOME/.profile\"\n"
+        "fi\n"
+    )
+
+
 def test_smoke_failed_preflight_honors_json_output(monkeypatch):
     monkeypatch.setattr(agentflow.cli, "build_local_smoke_doctor_report", lambda: _doctor_report(status="failed", detail="missing"))
     monkeypatch.setattr(agentflow.cli, "default_smoke_pipeline_path", lambda: "examples/local-real-agents-kimi-smoke.yaml")
@@ -1306,6 +1420,35 @@ def test_smoke_failed_preflight_honors_json_output(monkeypatch):
     assert json.loads(result.stdout) == {
         "status": "failed",
         "checks": [{"name": "kimi_shell_helper", "status": "failed", "detail": "missing"}],
+    }
+
+
+def test_smoke_failed_preflight_includes_shell_bridge_json_when_available(monkeypatch):
+    monkeypatch.setattr(
+        agentflow.cli,
+        "build_local_smoke_doctor_report",
+        lambda: DoctorReport(
+            status="failed",
+            checks=[
+                DoctorCheck(name="bash_login_startup", status="warning", detail="missing bridge"),
+                DoctorCheck(name="kimi_shell_helper", status="failed", detail="missing"),
+            ],
+        ),
+    )
+    monkeypatch.setattr(agentflow.cli, "build_bash_login_shell_bridge_recommendation", _shell_bridge_recommendation)
+    monkeypatch.setattr(agentflow.cli, "default_smoke_pipeline_path", lambda: "examples/local-real-agents-kimi-smoke.yaml")
+    monkeypatch.setattr(agentflow.cli, "_load_pipeline", lambda path: (_ for _ in ()).throw(AssertionError("pipeline should not load")))
+
+    result = runner.invoke(app, ["smoke", "--output", "json"])
+
+    assert result.exit_code == 1
+    assert json.loads(result.stdout) == {
+        "status": "failed",
+        "checks": [
+            {"name": "bash_login_startup", "status": "warning", "detail": "missing bridge"},
+            {"name": "kimi_shell_helper", "status": "failed", "detail": "missing"},
+        ],
+        "shell_bridge": _shell_bridge_recommendation().as_dict(),
     }
 
 

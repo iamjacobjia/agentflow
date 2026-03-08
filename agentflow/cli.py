@@ -311,6 +311,16 @@ def _doctor_report():
     return build_local_smoke_doctor_report()
 
 
+def _preflight_shell_bridge_recommendation(report: object) -> object | None:
+    for check in getattr(report, "checks", []) or []:
+        if getattr(check, "name", None) != "bash_login_startup":
+            continue
+        if _status_value(getattr(check, "status", "unknown")) not in {"warning", "failed"}:
+            continue
+        return build_bash_login_shell_bridge_recommendation()
+    return None
+
+
 def _structured_output_from_run_output(output: RunOutputFormat) -> StructuredOutputFormat:
     if output == RunOutputFormat.SUMMARY:
         return StructuredOutputFormat.SUMMARY
@@ -393,11 +403,24 @@ def _load_pipeline_with_optional_smoke_preflight(
     if should_run_preflight:
         report = _doctor_report()
         doctor_output = _structured_output_from_run_output(output)
+        shell_bridge = _preflight_shell_bridge_recommendation(report)
+        include_shell_bridge = shell_bridge is not None
         if report.status == "failed":
-            _echo_doctor_report(report, output=doctor_output)
+            _echo_doctor_report(
+                report,
+                output=doctor_output,
+                include_shell_bridge=include_shell_bridge,
+                shell_bridge=shell_bridge,
+            )
             raise typer.Exit(code=1)
         if report.status == "warning":
-            _echo_doctor_report(report, output=doctor_output, err=True)
+            _echo_doctor_report(
+                report,
+                output=doctor_output,
+                err=True,
+                include_shell_bridge=include_shell_bridge,
+                shell_bridge=shell_bridge,
+            )
 
     return pipeline if pipeline is not None else _load_pipeline(selected_path)
 
