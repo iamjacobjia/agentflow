@@ -113,6 +113,18 @@ def test_kimi_shell_init_requires_interactive_bash_warning_supports_shell_init_l
     )
 
 
+def test_kimi_shell_init_requires_interactive_bash_warning_accepts_bash_env_bootstrap(tmp_path: Path):
+    shell_env = tmp_path / "shell.env"
+    shell_env.write_text("kimi(){ :; }\n", encoding="utf-8")
+    target = {
+        "kind": "local",
+        "shell": f"env BASH_ENV={shell_env} bash -c",
+        "shell_init": "kimi",
+    }
+
+    assert kimi_shell_init_requires_interactive_bash_warning(target) is None
+
+
 def test_kimi_shell_init_requires_interactive_bash_warning_ignores_plain_text_kimi_output():
     target = {
         "kind": "local",

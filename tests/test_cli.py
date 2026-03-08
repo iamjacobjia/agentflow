@@ -735,6 +735,39 @@ nodes:
     assert payload["nodes"][0].get("warnings") is None
 
 
+def test_inspect_command_accepts_bash_env_kimi_wrapper(tmp_path):
+    shell_env = tmp_path / "shell.env"
+    shell_env.write_text("kimi(){ :; }\n", encoding="utf-8")
+
+    pipeline_path = tmp_path / "pipeline.yaml"
+    pipeline_path.write_text(
+        f"""name: inspect-kimi-bash-env
+working_dir: .
+nodes:
+  - id: review
+    agent: claude
+    prompt: hi
+    target:
+      kind: local
+      shell: \"env BASH_ENV={shell_env} bash -c 'kimi && {{command}}'\"
+""",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["inspect", str(pipeline_path), "--output", "json-summary"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["pipeline"] == {
+        "name": "inspect-kimi-bash-env",
+        "working_dir": str(tmp_path.resolve()),
+        "node_count": 1,
+        "auto_preflight": "enabled - local Codex/Claude/Kimi nodes use a `kimi` shell bootstrap.",
+        "auto_preflight_matches": ["review (claude) via `target.shell`"],
+    }
+    assert payload["nodes"][0].get("warnings") is None
+
+
 def test_inspect_command_json_summary_includes_kimi_shell_init_warning(tmp_path):
     pipeline_path = tmp_path / "pipeline.yaml"
     pipeline_path.write_text(

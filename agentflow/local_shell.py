@@ -35,6 +35,7 @@ _KIMI_SUBSTITUTION_CONSUMERS = {".", "eval", "source"}
 _BASHRC_SOURCE_COMMANDS = {".", "source"}
 _COMMAND_SUBSTITUTION_PATTERN = re.compile(r"(?:\$|<)\(([^()]*)\)")
 _BACKTICK_COMMAND_SUBSTITUTION_PATTERN = re.compile(r"(?<!\\)`([^`]*)`")
+_HOME_REFERENCE_PATTERN = re.compile(r"\$(?:\{HOME\}|HOME)")
 _BASHRC_NONINTERACTIVE_GUARDS = (
     re.compile(r"case\s+\$-\s+in(?s:.*?)\*\)\s*return\s*;;"),
     re.compile(r"\[\[\s*\$-\s*!=\s*\*i\*\s*\]\]\s*&&\s*return"),
@@ -206,6 +207,74 @@ def _shell_command_exports_env_var_before_target(command: str | None, env_var: s
                     exported = True
 
     return False
+
+
+def _shell_command_prefix_env_value_for_target(command: str | None, env_var: str, target: str) -> str | None:
+    if not isinstance(command, str) or not command.strip() or not env_var or not target:
+        return None
+
+    tokens = _split_shell_parts(command)
+    expects_command = True
+    prefix_allows_options = False
+    assigned_values: dict[str, str] = {}
+
+    for index, token in enumerate(tokens):
+        if index > 0 and _is_command_flag(tokens[index - 1]):
+            nested = _shell_command_prefix_env_value_for_target(token, env_var, target)
+            if nested is not None:
+                return nested
+
+        normalized = _normalize_shell_token(token)
+        if _token_resets_command_position(token):
+            expects_command = True
+            prefix_allows_options = False
+            assigned_values = {}
+            continue
+
+        if expects_command:
+            if normalized == target:
+                return assigned_values.get(env_var)
+            if token in _COMMAND_POSITION_PREFIX_TOKENS:
+                prefix_allows_options = True
+                continue
+            if _looks_like_env_assignment(token):
+                name, value = normalized.split("=", 1)
+                assigned_values[name] = value
+                continue
+            if prefix_allows_options and (token == "--" or token.startswith("-")):
+                continue
+            expects_command = False
+            prefix_allows_options = False
+
+    return None
+
+
+def _resolve_shell_path(path: str, *, home: Path | None = None) -> Path:
+    resolved_home = (home or Path.home()).expanduser()
+    expanded = _HOME_REFERENCE_PATTERN.sub(str(resolved_home), path.strip())
+    expanded = os.path.expanduser(expanded)
+    candidate = Path(expanded)
+    if not candidate.is_absolute():
+        candidate = Path.cwd() / candidate
+    return candidate
+
+
+def _shell_file_defines_function(path: Path, function_name: str) -> bool:
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return False
+    pattern = re.compile(
+        rf"(?:^|[;\n])\s*(?:function\s+)?{re.escape(function_name)}(?:\s*\(\s*\))?\s*\{{"
+    )
+    return bool(pattern.search(text))
+
+
+def _shell_command_loads_kimi_from_bash_env(command: str | None, *, home: Path | None = None) -> bool:
+    bash_env = _shell_command_prefix_env_value_for_target(command, "BASH_ENV", "bash")
+    if not bash_env:
+        return False
+    return _shell_file_defines_function(_resolve_shell_path(bash_env, home=home), "kimi")
 
 
 def _shell_command_sources_bashrc_before_target(command: str | None, target: str) -> bool:
@@ -542,6 +611,8 @@ def kimi_shell_init_requires_interactive_bash_warning(target: Any, *, home: Path
 
     shell_init = _target_value(target, "shell_init")
     shell = _target_value(target, "shell")
+    if _shell_command_loads_kimi_from_bash_env(shell if isinstance(shell, str) else None, home=home):
+        return None
     guarded_bashrc = bashrc_returns_early_for_noninteractive_shell(home)
     if shell_init_uses_kimi_helper(shell_init):
         if guarded_bashrc:
