@@ -52,6 +52,8 @@ Run the bundled real-agent smoke check:
 agentflow smoke
 ```
 
+By default, `agentflow smoke` now prints a compact per-node summary instead of the full run record JSON. Use `agentflow smoke --output json` when you want the complete machine-readable payload.
+
 Check the local Codex/Claude/Kimi smoke prerequisites without launching a run:
 
 ```bash
@@ -78,6 +80,7 @@ CLI equivalents:
 ```bash
 agentflow serve --runs-dir .agentflow/runs --max-concurrent-runs 2
 agentflow run examples/pipeline.yaml --runs-dir .agentflow/runs --max-concurrent-runs 2
+agentflow run examples/pipeline.yaml --output summary
 ```
 
 ## Airflow-like Python DAG
@@ -255,7 +258,7 @@ You can run the same preflight directly:
 agentflow doctor
 ```
 
-The bundled smoke pipeline bootstraps the `kimi` shell helper inside the Claude node, so you do not need to wrap the entire `agentflow smoke` command in `bash -lic`. If you want to run a custom smoke pipeline instead, pass its path explicitly with `agentflow smoke path/to/pipeline.yaml`.
+The bundled smoke pipeline bootstraps the `kimi` shell helper inside the Claude node, so you do not need to wrap the entire `agentflow smoke` command in `bash -lic`. If you want to run a custom smoke pipeline instead, pass its path explicitly with `agentflow smoke path/to/pipeline.yaml`. Add `--output json` to either form when you want the full persisted run record instead of the compact summary.
 
 ## Reference sources
 
