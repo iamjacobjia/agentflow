@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 
 from fastapi.testclient import TestClient
 
@@ -103,3 +104,31 @@ def test_api_supports_cancel_and_rerun(tmp_path):
     assert rerun.status_code == 200
     rerun_id = rerun.json()["id"]
     assert rerun_id != run_id
+
+
+def test_api_stream_replays_completed_run_and_closes(tmp_path):
+    orchestrator = make_orchestrator(tmp_path)
+    app = create_app(store=orchestrator.store, orchestrator=orchestrator)
+    client = TestClient(app)
+
+    create = client.post(
+        "/api/runs",
+        json={
+            "pipeline": {
+                "name": "stream-replay",
+                "working_dir": str(tmp_path),
+                "nodes": [{"id": "alpha", "agent": "codex", "prompt": "stream ok"}],
+            }
+        },
+    )
+    run_id = create.json()["id"]
+    asyncio.run(orchestrator.wait(run_id, timeout=5))
+
+    with client.stream("GET", f"/api/runs/{run_id}/stream") as response:
+        lines = [line for line in response.iter_lines() if line]
+
+    assert response.status_code == 200
+    events = [json.loads(line.removeprefix("data: ")) for line in lines if line.startswith("data: ")]
+    assert events
+    assert events[-1]["type"] == "run_completed"
+    assert any(event["type"] == "node_completed" for event in events)
