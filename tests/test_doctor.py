@@ -585,6 +585,28 @@ def test_local_smoke_doctor_report_fails_when_claude_is_missing_in_bash_shell(tm
     }
 
 
+def test_local_smoke_doctor_report_fails_when_claude_cannot_launch_after_kimi_bootstrap(tmp_path: Path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".profile").write_text('if [ -f "$HOME/.bashrc" ]; then . "$HOME/.bashrc"; fi\n', encoding="utf-8")
+    (home / ".bashrc").write_text("kimi(){ :; }\n", encoding="utf-8")
+
+    monkeypatch.setattr("agentflow.doctor.shutil.which", lambda name: f"/tmp/{name}")
+    monkeypatch.setattr(
+        "agentflow.doctor.subprocess.run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(args=args[0], returncode=18, stdout="", stderr="claude failed\n"),
+    )
+
+    report = build_local_smoke_doctor_report(home=home)
+
+    assert report.status == "failed"
+    assert report.as_dict()["checks"][-1] == {
+        "name": "kimi_shell_helper",
+        "status": "failed",
+        "detail": "`kimi` runs in `bash -lic`, and `claude` is on PATH afterwards, but `claude --version` still fails; the bundled smoke pipeline will not be able to launch Claude-on-Kimi.",
+    }
+
+
 def test_local_smoke_doctor_report_fails_when_codex_is_missing_after_kimi_bootstrap(tmp_path: Path, monkeypatch):
     home = tmp_path / "home"
     home.mkdir()

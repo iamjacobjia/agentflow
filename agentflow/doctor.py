@@ -20,6 +20,7 @@ _CODEX_AFTER_KIMI_MISSING_EXIT_CODE = 14
 _KIMI_BASE_URL_MISSING_EXIT_CODE = 15
 _KIMI_BASE_URL_MISMATCH_EXIT_CODE = 16
 _CODEX_LOGIN_STATUS_AFTER_KIMI_FAILED_EXIT_CODE = 17
+_CLAUDE_AFTER_KIMI_VERSION_FAILED_EXIT_CODE = 18
 _EXPECTED_KIMI_ANTHROPIC_BASE_URL = "https://api.kimi.com/coding/"
 _REDACTED = "<redacted>"
 _BASH_INTERACTIVE_STDERR_NOISE = (
@@ -532,6 +533,7 @@ def _check_kimi_shell_helper(home: Path | None = None) -> DoctorCheck:
                 'fi'
             ),
             f"type {shlex.quote('claude')} >/dev/null 2>&1 || exit {_CLAUDE_IN_SHELL_MISSING_EXIT_CODE}",
+            f"{shlex.quote('claude')} --version >/dev/null 2>&1 || exit {_CLAUDE_AFTER_KIMI_VERSION_FAILED_EXIT_CODE}",
             f"type {shlex.quote('codex')} >/dev/null 2>&1 || exit {_CODEX_AFTER_KIMI_MISSING_EXIT_CODE}",
             (
                 "codex login status >/dev/null 2>&1 "
@@ -577,6 +579,15 @@ def _check_kimi_shell_helper(home: Path | None = None) -> DoctorCheck:
             detail=(
                 "`kimi` runs in `bash -lic`, but `claude` is unavailable afterwards; "
                 "the bundled smoke pipeline will not be able to launch Claude-on-Kimi."
+            ),
+        )
+    if result.returncode == _CLAUDE_AFTER_KIMI_VERSION_FAILED_EXIT_CODE:
+        return DoctorCheck(
+            name="kimi_shell_helper",
+            status="failed",
+            detail=(
+                "`kimi` runs in `bash -lic`, and `claude` is on PATH afterwards, but `claude --version` still "
+                "fails; the bundled smoke pipeline will not be able to launch Claude-on-Kimi."
             ),
         )
     if result.returncode == _CODEX_AFTER_KIMI_MISSING_EXIT_CODE:
