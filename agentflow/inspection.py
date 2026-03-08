@@ -4,7 +4,11 @@ import shlex
 from pathlib import Path
 from typing import Any
 
-from agentflow.local_shell import kimi_shell_init_requires_interactive_bash_warning, render_shell_init
+from agentflow.local_shell import (
+    kimi_shell_init_requires_bash_warning,
+    kimi_shell_init_requires_interactive_bash_warning,
+    render_shell_init,
+)
 from agentflow.agents.registry import AdapterRegistry, default_adapter_registry
 from agentflow.context import render_node_prompt
 from agentflow.prepared import build_execution_paths
@@ -181,6 +185,10 @@ def _bootstrap_summary(target: dict[str, Any]) -> str | None:
 
 def _target_warnings(target: dict[str, Any]) -> list[str]:
     warnings: list[str] = []
+
+    kimi_bash_warning = kimi_shell_init_requires_bash_warning(target)
+    if kimi_bash_warning:
+        warnings.append(kimi_bash_warning)
 
     kimi_warning = kimi_shell_init_requires_interactive_bash_warning(target)
     if kimi_warning:

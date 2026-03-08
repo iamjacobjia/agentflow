@@ -14,6 +14,7 @@ from pydantic import ValidationError
 from agentflow.defaults import default_smoke_pipeline_path
 from agentflow.doctor import DoctorCheck, build_bash_login_shell_bridge_recommendation, build_local_smoke_doctor_report
 from agentflow.local_shell import (
+    kimi_shell_init_requires_bash_warning,
     kimi_shell_init_requires_interactive_bash_warning,
     shell_command_uses_kimi_helper,
     shell_init_exports_env_var,
@@ -358,7 +359,7 @@ def _node_uses_kimi_smoke_bootstrap(node: object) -> bool:
     return _node_kimi_smoke_preflight_match(node) is not None
 
 
-def _node_kimi_shell_bootstrap_warning(node: object) -> str | None:
+def _node_kimi_shell_bootstrap_check(node: object) -> DoctorCheck | None:
     agent = _status_value(getattr(node, "agent", None)).lower()
     if agent not in _KIMI_SHELL_PREFLIGHT_AGENTS:
         return None
@@ -367,7 +368,25 @@ def _node_kimi_shell_bootstrap_warning(node: object) -> str | None:
     if getattr(target, "kind", None) != "local":
         return None
 
-    return kimi_shell_init_requires_interactive_bash_warning(target)
+    node_id = str(getattr(node, "id", "node"))
+
+    bash_warning = kimi_shell_init_requires_bash_warning(target)
+    if bash_warning is not None:
+        return DoctorCheck(
+            name="kimi_shell_bootstrap",
+            status="failed",
+            detail=f"Node `{node_id}`: {bash_warning}",
+        )
+
+    interactive_warning = kimi_shell_init_requires_interactive_bash_warning(target)
+    if interactive_warning is not None:
+        return DoctorCheck(
+            name="kimi_shell_bootstrap",
+            status="warning",
+            detail=f"Node `{node_id}`: {interactive_warning}",
+        )
+
+    return None
 
 
 def _node_kimi_smoke_preflight_match(node: object) -> dict[str, str] | None:
@@ -426,17 +445,10 @@ def _pipeline_uses_kimi_smoke_preflight(pipeline: object) -> bool:
 def _pipeline_kimi_shell_bootstrap_checks(pipeline: object) -> list[DoctorCheck]:
     checks: list[DoctorCheck] = []
     for node in getattr(pipeline, "nodes", None) or []:
-        warning = _node_kimi_shell_bootstrap_warning(node)
-        if warning is None:
+        check = _node_kimi_shell_bootstrap_check(node)
+        if check is None:
             continue
-        node_id = str(getattr(node, "id", "node"))
-        checks.append(
-            DoctorCheck(
-                name="kimi_shell_bootstrap",
-                status="warning",
-                detail=f"Node `{node_id}`: {warning}",
-            )
-        )
+        checks.append(check)
     return checks
 
 

@@ -439,7 +439,7 @@ nodes:
     prompt: hi
     target:
       kind: local
-      shell: "bash -lc 'printf kimi-ready'"
+      shell: "bash -lc 'printf kimi-ready && {command}'"
       shell_init: echo kimi-ready
 """,
         encoding="utf-8",
@@ -736,6 +736,35 @@ nodes:
     ]
 
 
+def test_inspect_command_warns_when_kimi_shell_init_uses_non_bash_shell(tmp_path):
+    pipeline_path = tmp_path / "pipeline.yaml"
+    pipeline_path.write_text(
+        """name: inspect-non-bash-kimi
+working_dir: .
+nodes:
+  - id: review
+    agent: claude
+    provider: kimi
+    prompt: hi
+    target:
+      kind: local
+      shell: sh
+      shell_init: kimi
+""",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["inspect", str(pipeline_path), "--output", "json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["nodes"][0]["warnings"] == [
+        "`shell_init: kimi` requires bash-style shell bootstrap, but `target.shell` resolves to `sh`. "
+        "Use `shell: bash` with `target.shell_login: true` and `target.shell_interactive: true`, "
+        "use `bash -lic`, or export provider variables directly."
+    ]
+
+
 @pytest.mark.parametrize(
     "command",
     [
@@ -781,7 +810,7 @@ nodes:
 
     assert result.exit_code == 0
     assert captured == {"pipeline": "kimi-preflight-warning"}
-    payload = json.loads(result.stderr)
+    payload = json.loads(result.stderr or result.stdout)
     assert payload["status"] == "warning"
     assert payload["checks"] == [
         {"name": "kimi_shell_helper", "status": "ok", "detail": "ready"},
@@ -789,6 +818,60 @@ nodes:
             "name": "kimi_shell_bootstrap",
             "status": "warning",
             "detail": "Node `review`: `shell_init: kimi` uses bash without interactive startup; helpers from `~/.bashrc` are usually unavailable. Set `target.shell_interactive: true` or use `bash -lic`.",
+        },
+    ]
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        ["run"],
+        ["smoke"],
+    ],
+)
+def test_run_and_smoke_preflight_fail_when_kimi_shell_init_uses_non_bash_shell(tmp_path, monkeypatch, command):
+    pipeline_path = tmp_path / "pipeline.yaml"
+    pipeline_path.write_text(
+        """name: kimi-preflight-non-bash
+working_dir: .
+nodes:
+  - id: review
+    agent: claude
+    provider: kimi
+    prompt: hi
+    target:
+      kind: local
+      shell: sh
+      shell_init: kimi
+""",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        agentflow.cli,
+        "build_local_smoke_doctor_report",
+        lambda: DoctorReport(
+            status="ok",
+            checks=[DoctorCheck(name="kimi_shell_helper", status="ok", detail="ready")],
+        ),
+    )
+    monkeypatch.setattr(
+        agentflow.cli,
+        "_run_pipeline",
+        lambda pipeline, runs_dir, max_concurrent_runs, output: pytest.fail("pipeline should not run"),
+    )
+
+    result = runner.invoke(app, [*command, str(pipeline_path), "--output", "json"])
+
+    assert result.exit_code == 1
+    payload = json.loads(result.stderr or result.stdout)
+    assert payload["status"] == "failed"
+    assert payload["checks"] == [
+        {"name": "kimi_shell_helper", "status": "ok", "detail": "ready"},
+        {
+            "name": "kimi_shell_bootstrap",
+            "status": "failed",
+            "detail": "Node `review`: `shell_init: kimi` requires bash-style shell bootstrap, but `target.shell` resolves to `sh`. Use `shell: bash` with `target.shell_login: true` and `target.shell_interactive: true`, use `bash -lic`, or export provider variables directly.",
         },
     ]
 
@@ -2276,6 +2359,36 @@ def test_doctor_with_pipeline_path_augments_report_for_kimi_shell_bootstrap_warn
         "Doctor: warning\n"
         "- kimi_shell_helper: ok - ready\n"
         "- kimi_shell_bootstrap: warning - Node `claude_review`: `shell_init: kimi` uses bash without interactive startup; helpers from `~/.bashrc` are usually unavailable. Set `target.shell_interactive: true` or use `bash -lic`.\n"
+        "Pipeline auto preflight: enabled - local Codex/Claude/Kimi nodes use a `kimi` shell bootstrap.\n"
+        "Pipeline auto preflight matches: claude_review (claude) via `target.shell_init`\n"
+    )
+
+
+def test_doctor_with_pipeline_path_fails_for_non_bash_kimi_shell_bootstrap(monkeypatch):
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(agentflow.cli, "build_local_smoke_doctor_report", lambda: _doctor_report())
+    fake_pipeline = SimpleNamespace(
+        nodes=[
+            SimpleNamespace(
+                id="claude_review",
+                agent=SimpleNamespace(value="claude"),
+                provider="kimi",
+                env={},
+                target=SimpleNamespace(kind="local", shell="sh", shell_init="kimi", shell_interactive=False),
+            )
+        ]
+    )
+    monkeypatch.setattr(agentflow.cli, "_load_pipeline", _capture_pipeline_loader(captured, fake_pipeline))
+
+    result = runner.invoke(app, ["doctor", "custom-smoke.yaml", "--output", "summary"])
+
+    assert result.exit_code == 1
+    assert captured["loaded_path"] == "custom-smoke.yaml"
+    assert result.stdout == (
+        "Doctor: failed\n"
+        "- kimi_shell_helper: ok - ready\n"
+        "- kimi_shell_bootstrap: failed - Node `claude_review`: `shell_init: kimi` requires bash-style shell bootstrap, but `target.shell` resolves to `sh`. Use `shell: bash` with `target.shell_login: true` and `target.shell_interactive: true`, use `bash -lic`, or export provider variables directly.\n"
         "Pipeline auto preflight: enabled - local Codex/Claude/Kimi nodes use a `kimi` shell bootstrap.\n"
         "Pipeline auto preflight matches: claude_review (claude) via `target.shell_init`\n"
     )
