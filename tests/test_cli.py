@@ -549,6 +549,96 @@ def test_smoke_skips_preflight_for_custom_pipeline_in_auto_mode(monkeypatch):
     assert captured["wait_timeout"] is None
 
 
+def test_smoke_auto_runs_preflight_for_custom_pipeline_with_kimi_shell_init(monkeypatch):
+    captured: dict[str, object] = {}
+    doctor_calls = 0
+
+    class FakeOrchestrator:
+        async def submit(self, pipeline: object):
+            captured["submitted_pipeline"] = pipeline
+            return SimpleNamespace(id="smoke-custom-kimi-shell-init")
+
+        async def wait(self, run_id: str, timeout: float | None = None):
+            captured["wait_run_id"] = run_id
+            captured["wait_timeout"] = timeout
+            return _completed_run(run_id, pipeline_name="custom-kimi-smoke")
+
+    def fake_doctor_report():
+        nonlocal doctor_calls
+        doctor_calls += 1
+        return _doctor_report()
+
+    monkeypatch.setattr(agentflow.cli, "build_local_smoke_doctor_report", fake_doctor_report)
+    monkeypatch.setattr(
+        agentflow.cli,
+        "_build_runtime",
+        lambda runs_dir, max_concurrent_runs: (SimpleNamespace(run_dir=lambda run_id: Path(runs_dir) / run_id), FakeOrchestrator()),
+    )
+    fake_pipeline = SimpleNamespace(
+        nodes=[
+            SimpleNamespace(
+                agent=SimpleNamespace(value="codex"),
+                target=SimpleNamespace(kind="local", shell="bash", shell_init="kimi"),
+            )
+        ]
+    )
+    monkeypatch.setattr(agentflow.cli, "_load_pipeline", _capture_pipeline_loader(captured, fake_pipeline))
+
+    result = runner.invoke(app, ["smoke", "custom-smoke.yaml"])
+
+    assert result.exit_code == 0
+    assert doctor_calls == 1
+    assert captured["loaded_path"] == "custom-smoke.yaml"
+    assert captured["submitted_pipeline"] is fake_pipeline
+    assert captured["wait_run_id"] == "smoke-custom-kimi-shell-init"
+    assert captured["wait_timeout"] is None
+
+
+def test_smoke_auto_runs_preflight_for_custom_pipeline_with_explicit_kimi_shell_wrapper(monkeypatch):
+    captured: dict[str, object] = {}
+    doctor_calls = 0
+
+    class FakeOrchestrator:
+        async def submit(self, pipeline: object):
+            captured["submitted_pipeline"] = pipeline
+            return SimpleNamespace(id="smoke-custom-kimi-wrapper")
+
+        async def wait(self, run_id: str, timeout: float | None = None):
+            captured["wait_run_id"] = run_id
+            captured["wait_timeout"] = timeout
+            return _completed_run(run_id, pipeline_name="custom-kimi-shell-wrapper")
+
+    def fake_doctor_report():
+        nonlocal doctor_calls
+        doctor_calls += 1
+        return _doctor_report()
+
+    monkeypatch.setattr(agentflow.cli, "build_local_smoke_doctor_report", fake_doctor_report)
+    monkeypatch.setattr(
+        agentflow.cli,
+        "_build_runtime",
+        lambda runs_dir, max_concurrent_runs: (SimpleNamespace(run_dir=lambda run_id: Path(runs_dir) / run_id), FakeOrchestrator()),
+    )
+    fake_pipeline = SimpleNamespace(
+        nodes=[
+            SimpleNamespace(
+                agent=SimpleNamespace(value="claude"),
+                target=SimpleNamespace(kind="local", shell="bash -lic 'kimi && {command}'", shell_init=None),
+            )
+        ]
+    )
+    monkeypatch.setattr(agentflow.cli, "_load_pipeline", _capture_pipeline_loader(captured, fake_pipeline))
+
+    result = runner.invoke(app, ["smoke", "custom-smoke.yaml"])
+
+    assert result.exit_code == 0
+    assert doctor_calls == 1
+    assert captured["loaded_path"] == "custom-smoke.yaml"
+    assert captured["submitted_pipeline"] is fake_pipeline
+    assert captured["wait_run_id"] == "smoke-custom-kimi-wrapper"
+    assert captured["wait_timeout"] is None
+
+
 def test_smoke_runs_preflight_for_explicit_bundled_pipeline_path(monkeypatch):
     captured: dict[str, object] = {}
     doctor_calls = 0
