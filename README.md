@@ -41,10 +41,23 @@ Validate a pipeline:
 agentflow validate examples/pipeline.yaml
 ```
 
+Inspect the resolved launch plan before running it:
+
+```bash
+agentflow inspect examples/local-real-agents-kimi-smoke.yaml
+agentflow inspect examples/pipeline.yaml --node review --output json
+```
+
 Run a pipeline once:
 
 ```bash
 agentflow run examples/pipeline.yaml
+```
+
+Inspect how a pipeline will resolve prompts, shell bootstrap, and launch commands without executing any agents:
+
+```bash
+agentflow inspect examples/local-real-agents-kimi-smoke.yaml
 ```
 
 Run the bundled real-agent smoke check:
