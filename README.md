@@ -130,7 +130,7 @@ Built-in provider shorthands:
 
 ### Local
 
-Runs the prepared agent command directly on the host.
+Runs the prepared agent command directly on the host. Set `target.shell` to wrap the command in a specific shell, such as `bash -lc`. You can also use a `{command}` placeholder in the shell string to run shell bootstrap steps before the prepared agent command.
 
 ### Container
 

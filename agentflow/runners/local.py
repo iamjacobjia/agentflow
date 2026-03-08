@@ -11,14 +11,21 @@ from agentflow.specs import LocalTarget, NodeSpec
 
 
 class LocalRunner(Runner):
-    def _command_for_target(self, node: NodeSpec, prepared: PreparedExecution) -> list[str]:
+    def _command_for_target(self, node: NodeSpec, prepared: PreparedExecution) -> tuple[list[str], dict[str, str]]:
         target = node.target
         if not isinstance(target, LocalTarget) or not target.shell:
-            return prepared.command
+            return prepared.command, {}
+
+        command_text = shlex.join(prepared.command)
+        if "{command}" in target.shell:
+            shell_parts = shlex.split(target.shell.replace("{command}", 'eval "$AGENTFLOW_TARGET_COMMAND"'))
+            if not shell_parts:
+                return prepared.command, {}
+            return shell_parts, {"AGENTFLOW_TARGET_COMMAND": command_text}
 
         shell_parts = shlex.split(target.shell)
         if not shell_parts:
-            return prepared.command
+            return prepared.command, {}
 
         has_command_flag = any(
             part == "--command" or (part.startswith("-") and not part.startswith("--") and "c" in part[1:])
@@ -27,7 +34,7 @@ class LocalRunner(Runner):
         if not has_command_flag:
             shell_parts.append("-lc")
 
-        return [*shell_parts, shlex.join(prepared.command)]
+        return [*shell_parts, command_text], {}
 
     async def _consume_stream(self, stream, stream_name: str, buffer: list[str], on_output: StreamCallback) -> None:
         while True:
@@ -49,7 +56,8 @@ class LocalRunner(Runner):
         self.materialize_runtime_files(paths.host_runtime_dir, prepared.runtime_files)
         env = os.environ.copy()
         env.update(prepared.env)
-        command = self._command_for_target(node, prepared)
+        command, target_env = self._command_for_target(node, prepared)
+        env.update(target_env)
         process = await asyncio.create_subprocess_exec(
             *command,
             cwd=prepared.cwd,
