@@ -207,6 +207,14 @@ npx playwright test
 
 The Playwright tests use lightweight mock `codex` and `claude` executables under `tests/e2e/bin/` and exercise validation, retries, rerun, cancellation, and artifact viewing through the web UI.
 
+Run a real local smoke check with your installed CLIs:
+
+```bash
+bash -lic 'kimi; . .venv/bin/activate; agentflow run examples/local-real-agents-kimi-smoke.yaml'
+```
+
+This keeps the check small while exercising both local `codex` and local `claude` end-to-end. If your shell defines the `kimi` helper in `~/.bashrc`, the interactive login shell above will load it before running AgentFlow.
+
 ## Reference sources
 
 - `https://developers.openai.com/codex/security`
