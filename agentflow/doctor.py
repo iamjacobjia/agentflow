@@ -352,13 +352,45 @@ def _check_kimi_shell_helper(home: Path | None = None) -> DoctorCheck:
     )
 
 
+def _reconcile_bash_login_startup_check(
+    home: Path,
+    startup_check: DoctorCheck,
+    kimi_check: DoctorCheck,
+) -> DoctorCheck:
+    if startup_check.status != "warning" or kimi_check.status != "ok":
+        return startup_check
+
+    login_file = _bash_login_file(home)
+    if login_file is None:
+        return DoctorCheck(
+            name="bash_login_startup",
+            status="ok",
+            detail=(
+                "No `~/.bash_profile`, `~/.bash_login`, or `~/.profile` was found, but `bash -lic` already exposes "
+                "`kimi`, `claude`, and `codex`; a `~/.bashrc` bridge is not required for the bundled smoke pipeline."
+            ),
+        )
+
+    return DoctorCheck(
+        name="bash_login_startup",
+        status="ok",
+        detail=(
+            f"Bash login shells use `~/{login_file.name}`, and `bash -lic` already exposes `kimi`, `claude`, and "
+            "`codex`; a `~/.bashrc` bridge is not required for the bundled smoke pipeline."
+        ),
+    )
+
+
 def build_local_smoke_doctor_report(home: Path | None = None) -> DoctorReport:
     resolved_home = home or Path.home()
+    bash_login_check = _check_bash_login_startup(resolved_home)
+    kimi_check = _check_kimi_shell_helper(resolved_home)
+    bash_login_check = _reconcile_bash_login_startup_check(resolved_home, bash_login_check, kimi_check)
     checks = [
         _check_codex_executable(resolved_home),
         _check_claude_host_executable(),
-        _check_bash_login_startup(resolved_home),
-        _check_kimi_shell_helper(resolved_home),
+        bash_login_check,
+        kimi_check,
     ]
     if any(check.status == "failed" for check in checks):
         status = "failed"
