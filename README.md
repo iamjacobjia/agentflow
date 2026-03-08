@@ -190,6 +190,8 @@ if [ -f "$HOME"/.bashrc ]; then
 fi
 ```
 
+`agentflow doctor` now also calls out the easy-to-miss case where `~/.bash_profile` exists, does not source `~/.bashrc`, and silently prevents a working `~/.profile` -> `~/.bashrc` bridge from ever running.
+
 `shell_init` is treated as a bootstrap prerequisite: if it exits non-zero, AgentFlow does not launch the wrapped agent command. This helps smoke runs fail fast when helper functions such as `kimi` are missing.
 
 ### Container
@@ -276,6 +278,8 @@ agentflow smoke
 ```
 
 This keeps the check small while exercising both local `codex` and local `claude` end-to-end. Before the bundled smoke pipeline starts, AgentFlow runs a local preflight that verifies `codex`, confirms that `bash -lic` can find the `kimi` shell helper and still launch both `claude` and `codex` afterwards, checks that `kimi` exports `ANTHROPIC_API_KEY` for Claude-on-Kimi, and reports which bash login startup file is active, including transitive bridges such as `~/.bash_profile` -> `~/.profile` -> `~/.bashrc`. The preflight also warns when a login startup file references `~/.bashrc` but that file is missing, or when no bash login startup file exists to bridge into `~/.bashrc` at all. If `claude` only becomes available inside that login shell bootstrap, the preflight reports a warning instead of blocking the bundled smoke run.
+
+When `~/.bash_profile` or `~/.bash_login` shadows a working `~/.profile` bridge, the preflight now tells you that the alternate startup path will never run and points you at the file that needs the bridge.
 
 You can run the same preflight directly:
 
