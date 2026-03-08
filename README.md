@@ -60,6 +60,7 @@ For local nodes, it also surfaces shell bootstrap details such as `shell`, login
 It also shows whether `agentflow run` or `agentflow smoke` will trigger the local doctor preflight automatically in the default `auto` mode, which helps you confirm bundled-smoke and Kimi-bootstrap detection before you launch anything.
 When that auto preflight is enabled because of a local Kimi bootstrap, the inspect output now also names the matching nodes and whether the trigger came from `target.shell_init` or `target.shell`, so it is easier to trust why the guard rail will run.
 Use `--output json-summary` when you want the same compact information in a machine-readable format without the full prepared env and payload details from `--output json`.
+When a node launch will override current shell values such as `ANTHROPIC_BASE_URL` or `OPENAI_API_KEY`, that JSON summary also includes a structured `launch_env_overrides` list per node so wrappers can react without scraping warning text. Base-URL values are included verbatim; secret-like keys stay redacted.
 
 Run a pipeline once:
 
@@ -98,6 +99,7 @@ agentflow doctor
 ```
 
 `agentflow doctor` prints JSON by default so CI and wrapper scripts can parse it directly. Use `agentflow doctor --output summary` when you want a quick human-readable checklist instead.
+Those JSON checks also include per-check `context` when AgentFlow can explain a machine-readable cause, such as the node id and resolved values behind a `launch_env_override` warning.
 For the bundled smoke pipeline and custom local Kimi-bootstrapped Codex/Claude/Kimi DAGs, Doctor now also warns when the current shell exports conflicting launch values such as `ANTHROPIC_BASE_URL` that a node will replace at launch.
 
 You can also point Doctor at a custom pipeline to surface the same pipeline-specific local shell bootstrap warnings that `run` and `smoke` preflight use:
