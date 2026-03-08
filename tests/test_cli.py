@@ -1034,7 +1034,7 @@ nodes:
     prompt: hi
     target:
       kind: local
-      shell: "bash -lc 'KIMI_ENV=\"$(kimi)\" && eval \"$KIMI_ENV\" && {command}'"
+      shell: 'bash -lc ''KIMI_ENV="$(kimi)" && eval "$KIMI_ENV" && {command}'''
 """,
         encoding="utf-8",
     )
