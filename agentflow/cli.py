@@ -2,12 +2,20 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import datetime
+from enum import StrEnum
+from pathlib import Path
 
 import typer
 from agentflow.defaults import default_smoke_pipeline_path
 from agentflow.doctor import build_local_smoke_doctor_report
 
 app = typer.Typer(add_completion=False)
+
+
+class RunOutputFormat(StrEnum):
+    JSON = "json"
+    SUMMARY = "summary"
 
 
 def _build_runtime(runs_dir: str, max_concurrent_runs: int) -> tuple[object, object]:
@@ -37,15 +45,110 @@ def _load_pipeline(path: str) -> object:
     return load_pipeline_from_path(path)
 
 
-def _run_pipeline_path(path: str, runs_dir: str, max_concurrent_runs: int) -> None:
-    _, orchestrator = _build_runtime(runs_dir, max_concurrent_runs)
+def _status_value(status: object) -> str:
+    return getattr(status, "value", str(status))
+
+
+def _parse_iso8601(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    normalized = value.replace("Z", "+00:00")
+    try:
+        return datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+
+
+def _format_duration(started_at: str | None, finished_at: str | None) -> str | None:
+    started = _parse_iso8601(started_at)
+    finished = _parse_iso8601(finished_at)
+    if started is None or finished is None:
+        return None
+    duration_seconds = max((finished - started).total_seconds(), 0.0)
+    if duration_seconds < 10:
+        return f"{duration_seconds:.1f}s"
+    if duration_seconds < 60:
+        return f"{duration_seconds:.0f}s"
+    minutes, seconds = divmod(int(duration_seconds), 60)
+    return f"{minutes}m {seconds}s"
+
+
+def _preview_text(text: str | None, *, limit: int = 100) -> str | None:
+    if text is None:
+        return None
+    collapsed = " ".join(text.split())
+    if not collapsed:
+        return None
+    if len(collapsed) <= limit:
+        return collapsed
+    return collapsed[: limit - 1].rstrip() + "…"
+
+
+def _node_attempt_count(node: object) -> int:
+    current_attempt = getattr(node, "current_attempt", 0) or 0
+    attempts = getattr(node, "attempts", []) or []
+    return current_attempt or len(attempts)
+
+
+def _node_preview(node: object) -> str | None:
+    for candidate in (getattr(node, "final_response", None), getattr(node, "output", None)):
+        preview = _preview_text(candidate)
+        if preview is not None:
+            return preview
+    stderr_lines = getattr(node, "stderr_lines", []) or []
+    if stderr_lines:
+        return _preview_text(stderr_lines[-1])
+    return None
+
+
+def _render_run_summary(record: object, run_dir: Path | str | None = None) -> str:
+    lines = [f"Run {record.id}: {_status_value(record.status)}"]
+    pipeline_name = getattr(getattr(record, "pipeline", None), "name", None)
+    if pipeline_name:
+        lines.append(f"Pipeline: {pipeline_name}")
+    duration = _format_duration(getattr(record, "started_at", None), getattr(record, "finished_at", None))
+    if duration is not None:
+        lines.append(f"Duration: {duration}")
+    if run_dir is not None:
+        lines.append(f"Run dir: {run_dir}")
+    nodes = getattr(record, "nodes", {}) or {}
+    if nodes:
+        lines.append("Nodes:")
+        for node_id, node in nodes.items():
+            summary = f"{node_id}: {_status_value(getattr(node, 'status', 'unknown'))}"
+            metadata: list[str] = []
+            attempts = _node_attempt_count(node)
+            if attempts:
+                metadata.append(f"attempt {attempts}")
+            exit_code = getattr(node, "exit_code", None)
+            if exit_code is not None:
+                metadata.append(f"exit {exit_code}")
+            if metadata:
+                summary += f" ({', '.join(metadata)})"
+            preview = _node_preview(node)
+            if preview is not None:
+                summary += f" - {preview}"
+            lines.append(f"- {summary}")
+    return "\n".join(lines)
+
+
+def _echo_run_result(record: object, *, output: RunOutputFormat, run_dir: Path | str | None = None) -> None:
+    if output == RunOutputFormat.SUMMARY:
+        typer.echo(_render_run_summary(record, run_dir=run_dir))
+        return
+    typer.echo(json.dumps(record.model_dump(mode="json"), indent=2))
+
+
+def _run_pipeline_path(path: str, runs_dir: str, max_concurrent_runs: int, output: RunOutputFormat) -> None:
+    store, orchestrator = _build_runtime(runs_dir, max_concurrent_runs)
     pipeline = _load_pipeline(path)
 
     async def _run() -> None:
         run_record = await orchestrator.submit(pipeline)
         completed = await orchestrator.wait(run_record.id, timeout=None)
-        typer.echo(json.dumps(completed.model_dump(mode="json"), indent=2))
-        raise typer.Exit(code=0 if completed.status.value == "completed" else 1)
+        run_dir = store.run_dir(run_record.id) if hasattr(store, "run_dir") else None
+        _echo_run_result(completed, output=output, run_dir=run_dir)
+        raise typer.Exit(code=0 if _status_value(completed.status) == "completed" else 1)
 
     asyncio.run(_run())
 
@@ -80,8 +183,9 @@ def run(
     path: str,
     runs_dir: str = typer.Option(".agentflow/runs", envvar="AGENTFLOW_RUNS_DIR"),
     max_concurrent_runs: int = typer.Option(2, envvar="AGENTFLOW_MAX_CONCURRENT_RUNS"),
+    output: RunOutputFormat = typer.Option(RunOutputFormat.JSON, "--output", help="Result output format."),
 ) -> None:
-    _run_pipeline_path(path, runs_dir, max_concurrent_runs)
+    _run_pipeline_path(path, runs_dir, max_concurrent_runs, output)
 
 
 @app.command()
@@ -89,6 +193,7 @@ def smoke(
     path: str | None = typer.Argument(None, help="Optional pipeline path. Defaults to the bundled real-agent smoke example."),
     runs_dir: str = typer.Option(".agentflow/runs", envvar="AGENTFLOW_RUNS_DIR"),
     max_concurrent_runs: int = typer.Option(2, envvar="AGENTFLOW_MAX_CONCURRENT_RUNS"),
+    output: RunOutputFormat = typer.Option(RunOutputFormat.SUMMARY, "--output", help="Result output format."),
 ) -> None:
     if path is None:
         report = _doctor_report()
@@ -97,7 +202,7 @@ def smoke(
             raise typer.Exit(code=1)
         if report.status == "warning":
             _echo_doctor_report(report, err=True)
-    _run_pipeline_path(path or default_smoke_pipeline_path(), runs_dir, max_concurrent_runs)
+    _run_pipeline_path(path or default_smoke_pipeline_path(), runs_dir, max_concurrent_runs, output)
 
 
 @app.command()
