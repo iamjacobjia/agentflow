@@ -119,6 +119,23 @@ class LocalTarget(BaseModel):
     shell_interactive: bool = False
     shell_init: str | None = None
 
+    @model_validator(mode="after")
+    def validate_shell_bootstrap(self) -> "LocalTarget":
+        if self.shell and self.shell.strip():
+            return self
+
+        missing_shell_fields: list[str] = []
+        if self.shell_login:
+            missing_shell_fields.append("shell_login")
+        if self.shell_interactive:
+            missing_shell_fields.append("shell_interactive")
+        if self.shell_init:
+            missing_shell_fields.append("shell_init")
+        if missing_shell_fields:
+            joined = ", ".join(f"`target.{field}`" for field in missing_shell_fields)
+            raise ValueError(f"{joined} require `target.shell` on local targets")
+        return self
+
 
 class ContainerTarget(BaseModel):
     model_config = ConfigDict(extra="forbid")
