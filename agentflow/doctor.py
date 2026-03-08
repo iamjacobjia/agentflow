@@ -17,6 +17,9 @@ _KIMI_HELPER_MISSING_EXIT_CODE = 11
 _CLAUDE_IN_SHELL_MISSING_EXIT_CODE = 12
 _KIMI_API_KEY_MISSING_EXIT_CODE = 13
 _CODEX_AFTER_KIMI_MISSING_EXIT_CODE = 14
+_KIMI_BASE_URL_MISSING_EXIT_CODE = 15
+_KIMI_BASE_URL_MISMATCH_EXIT_CODE = 16
+_EXPECTED_KIMI_ANTHROPIC_BASE_URL = "https://api.kimi.com/coding/"
 _REDACTED = "<redacted>"
 _BASH_INTERACTIVE_STDERR_NOISE = (
     "bash: cannot set terminal process group (",
@@ -489,11 +492,21 @@ def _check_kimi_shell_helper(home: Path | None = None) -> DoctorCheck:
     env = os.environ.copy()
     if home is not None:
         env["HOME"] = str(home)
+    expected_base_url = _EXPECTED_KIMI_ANTHROPIC_BASE_URL.rstrip("/")
     script = "\n".join(
         [
             f"type {shlex.quote('kimi')} >/dev/null 2>&1 || exit {_KIMI_HELPER_MISSING_EXIT_CODE}",
             "kimi >/dev/null || exit $?",
             f'[ -n "${{ANTHROPIC_API_KEY:-}}" ] || exit {_KIMI_API_KEY_MISSING_EXIT_CODE}',
+            f'[ -n "${{ANTHROPIC_BASE_URL:-}}" ] || exit {_KIMI_BASE_URL_MISSING_EXIT_CODE}',
+            (
+                'if [ "${ANTHROPIC_BASE_URL%/}" != "'
+                f'{expected_base_url}'
+                '" ]; then '
+                'printf "%s" "${ANTHROPIC_BASE_URL:-}"; '
+                f'exit {_KIMI_BASE_URL_MISMATCH_EXIT_CODE}; '
+                'fi'
+            ),
             f"type {shlex.quote('claude')} >/dev/null 2>&1 || exit {_CLAUDE_IN_SHELL_MISSING_EXIT_CODE}",
             f"type {shlex.quote('codex')} >/dev/null 2>&1 || exit {_CODEX_AFTER_KIMI_MISSING_EXIT_CODE}",
         ]
@@ -518,6 +531,7 @@ def _check_kimi_shell_helper(home: Path | None = None) -> DoctorCheck:
             status="ok",
             detail=(
                 "`kimi` is available in `bash -lic`, exports `ANTHROPIC_API_KEY`, "
+                f"sets `ANTHROPIC_BASE_URL={_EXPECTED_KIMI_ANTHROPIC_BASE_URL}`, "
                 "and keeps both `claude` and `codex` available for the bundled smoke pipeline."
             ),
         )
@@ -552,6 +566,26 @@ def _check_kimi_shell_helper(home: Path | None = None) -> DoctorCheck:
             detail=(
                 "`kimi` runs in `bash -lic`, but it does not export `ANTHROPIC_API_KEY`; "
                 "the bundled smoke pipeline will not be able to authenticate Claude-on-Kimi."
+            ),
+        )
+    if result.returncode == _KIMI_BASE_URL_MISSING_EXIT_CODE:
+        return DoctorCheck(
+            name="kimi_shell_helper",
+            status="failed",
+            detail=(
+                "`kimi` runs in `bash -lic`, but it does not export `ANTHROPIC_BASE_URL`; "
+                "the bundled smoke pipeline will not be able to route Claude through Kimi."
+            ),
+        )
+    if result.returncode == _KIMI_BASE_URL_MISMATCH_EXIT_CODE:
+        actual_base_url = result.stdout.strip() or "<empty>"
+        return DoctorCheck(
+            name="kimi_shell_helper",
+            status="failed",
+            detail=(
+                "`kimi` runs in `bash -lic`, but `ANTHROPIC_BASE_URL` is "
+                f"`{actual_base_url}` instead of `{_EXPECTED_KIMI_ANTHROPIC_BASE_URL}`; "
+                "the bundled smoke pipeline will not be able to route Claude through Kimi."
             ),
         )
     detail = _format_shell_diagnostic(result.stderr) or f"exit status {result.returncode}"

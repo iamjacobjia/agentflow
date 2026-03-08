@@ -7,6 +7,13 @@ from pathlib import Path
 from agentflow.doctor import build_bash_login_shell_bridge_recommendation, build_local_smoke_doctor_report
 
 
+_KIMI_HELPER_OK_DETAIL = (
+    "`kimi` is available in `bash -lic`, exports `ANTHROPIC_API_KEY`, "
+    "sets `ANTHROPIC_BASE_URL=https://api.kimi.com/coding/`, and keeps both `claude` and `codex` available "
+    "for the bundled smoke pipeline."
+)
+
+
 def test_local_smoke_doctor_report_ok_with_profile_bridge(tmp_path: Path, monkeypatch):
     home = tmp_path / "home"
     home.mkdir()
@@ -35,7 +42,7 @@ def test_local_smoke_doctor_report_ok_with_profile_bridge(tmp_path: Path, monkey
             {
                 "name": "kimi_shell_helper",
                 "status": "ok",
-                "detail": "`kimi` is available in `bash -lic`, exports `ANTHROPIC_API_KEY`, and keeps both `claude` and `codex` available for the bundled smoke pipeline.",
+                "detail": _KIMI_HELPER_OK_DETAIL,
             },
         ],
     }
@@ -387,7 +394,7 @@ def test_local_smoke_doctor_report_checks_kimi_helper_in_supplied_home(tmp_path:
     assert report.as_dict()["checks"][-1] == {
         "name": "kimi_shell_helper",
         "status": "ok",
-        "detail": "`kimi` is available in `bash -lic`, exports `ANTHROPIC_API_KEY`, and keeps both `claude` and `codex` available for the bundled smoke pipeline.",
+        "detail": _KIMI_HELPER_OK_DETAIL,
     }
 
 
@@ -419,7 +426,7 @@ def test_local_smoke_doctor_report_warns_when_claude_is_only_available_in_bash_s
     assert report.as_dict()["checks"][-1] == {
         "name": "kimi_shell_helper",
         "status": "ok",
-        "detail": "`kimi` is available in `bash -lic`, exports `ANTHROPIC_API_KEY`, and keeps both `claude` and `codex` available for the bundled smoke pipeline.",
+        "detail": _KIMI_HELPER_OK_DETAIL,
     }
 
 
@@ -481,7 +488,7 @@ def test_local_smoke_doctor_report_warns_when_codex_is_only_available_after_kimi
     assert report.as_dict()["checks"][-1] == {
         "name": "kimi_shell_helper",
         "status": "ok",
-        "detail": "`kimi` is available in `bash -lic`, exports `ANTHROPIC_API_KEY`, and keeps both `claude` and `codex` available for the bundled smoke pipeline.",
+        "detail": _KIMI_HELPER_OK_DETAIL,
     }
 
 
@@ -504,6 +511,55 @@ def test_local_smoke_doctor_report_fails_when_kimi_helper_does_not_export_api_ke
         "name": "kimi_shell_helper",
         "status": "failed",
         "detail": "`kimi` runs in `bash -lic`, but it does not export `ANTHROPIC_API_KEY`; the bundled smoke pipeline will not be able to authenticate Claude-on-Kimi.",
+    }
+
+
+def test_local_smoke_doctor_report_fails_when_kimi_helper_does_not_export_base_url(tmp_path: Path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".profile").write_text('if [ -f "$HOME/.bashrc" ]; then . "$HOME/.bashrc"; fi\n', encoding="utf-8")
+    (home / ".bashrc").write_text("kimi(){ :; }\n", encoding="utf-8")
+
+    monkeypatch.setattr("agentflow.doctor.shutil.which", lambda name: f"/tmp/{name}")
+    monkeypatch.setattr(
+        "agentflow.doctor.subprocess.run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(args=args[0], returncode=15, stdout="", stderr=""),
+    )
+
+    report = build_local_smoke_doctor_report(home=home)
+
+    assert report.status == "failed"
+    assert report.as_dict()["checks"][-1] == {
+        "name": "kimi_shell_helper",
+        "status": "failed",
+        "detail": "`kimi` runs in `bash -lic`, but it does not export `ANTHROPIC_BASE_URL`; the bundled smoke pipeline will not be able to route Claude through Kimi.",
+    }
+
+
+def test_local_smoke_doctor_report_fails_when_kimi_helper_exports_wrong_base_url(tmp_path: Path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".profile").write_text('if [ -f "$HOME/.bashrc" ]; then . "$HOME/.bashrc"; fi\n', encoding="utf-8")
+    (home / ".bashrc").write_text("kimi(){ :; }\n", encoding="utf-8")
+
+    monkeypatch.setattr("agentflow.doctor.shutil.which", lambda name: f"/tmp/{name}")
+    monkeypatch.setattr(
+        "agentflow.doctor.subprocess.run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            args=args[0],
+            returncode=16,
+            stdout="https://open.bigmodel.cn/api/anthropic\n",
+            stderr="",
+        ),
+    )
+
+    report = build_local_smoke_doctor_report(home=home)
+
+    assert report.status == "failed"
+    assert report.as_dict()["checks"][-1] == {
+        "name": "kimi_shell_helper",
+        "status": "failed",
+        "detail": "`kimi` runs in `bash -lic`, but `ANTHROPIC_BASE_URL` is `https://open.bigmodel.cn/api/anthropic` instead of `https://api.kimi.com/coding/`; the bundled smoke pipeline will not be able to route Claude through Kimi.",
     }
 
 
