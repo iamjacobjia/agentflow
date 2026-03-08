@@ -51,7 +51,8 @@ def _strip_shell_comments(line: str) -> str:
     return "".join(result)
 
 
-def _shell_sources_file(text: str, filename: str, home: Path | None = None) -> bool:
+def _iter_shell_source_targets(text: str) -> tuple[str, ...]:
+    targets: list[str] = []
     for raw_line in text.splitlines():
         line = _strip_shell_comments(raw_line).strip()
         if not line:
@@ -61,24 +62,56 @@ def _shell_sources_file(text: str, filename: str, home: Path | None = None) -> b
         except ValueError:
             tokens = line.split()
         for index, token in enumerate(tokens[:-1]):
-            if token not in {"source", "."}:
-                continue
-            if _shell_source_target_matches(tokens[index + 1], filename, home=home):
-                return True
-    return False
+            if token in {"source", "."}:
+                targets.append(tokens[index + 1])
+    return tuple(targets)
 
 
-def _shell_source_target_matches(token: str, filename: str, home: Path | None = None) -> bool:
+def _resolve_home_shell_source_target(token: str, home: Path) -> Path | None:
     normalized = token.rstrip(";)")
-    accepted_targets = {
-        filename,
-        f"~/{filename}",
-        f"$HOME/{filename}",
-        f"${{HOME}}/{filename}",
-    }
-    if home is not None:
-        accepted_targets.add(str((home / filename).resolve()))
-    return normalized in accepted_targets
+    if not normalized:
+        return None
+
+    resolved_home = home.resolve()
+    if normalized.startswith("~/"):
+        candidate = (resolved_home / normalized[2:]).resolve()
+    elif normalized.startswith("$HOME/"):
+        candidate = (resolved_home / normalized[6:]).resolve()
+    elif normalized.startswith("${HOME}/"):
+        candidate = (resolved_home / normalized[8:]).resolve()
+    elif normalized.startswith("$"):
+        return None
+    else:
+        raw_path = Path(normalized)
+        candidate = raw_path.resolve() if raw_path.is_absolute() else (resolved_home / raw_path).resolve()
+
+    try:
+        candidate.relative_to(resolved_home)
+    except ValueError:
+        return None
+    return candidate
+
+
+def _shell_sources_file(text: str, filename: str, home: Path | None = None) -> bool:
+    if home is None:
+        accepted_targets = {
+            filename,
+            f"~/{filename}",
+            f"$HOME/{filename}",
+            f"${{HOME}}/{filename}",
+        }
+        return any(token.rstrip(";)") in accepted_targets for token in _iter_shell_source_targets(text))
+
+    target = (home / filename).resolve()
+    return any(
+        resolved == target
+        for token in _iter_shell_source_targets(text)
+        if (resolved := _resolve_home_shell_source_target(token, home)) is not None
+    )
+
+
+def _home_relative_shell_path(home: Path, path: Path) -> str:
+    return path.resolve().relative_to(home.resolve()).as_posix()
 
 
 def _is_bash_interactive_stderr_noise(line: str) -> bool:
@@ -221,22 +254,27 @@ def _bash_startup_chain_to_bashrc(
     startup_file: Path,
     seen: frozenset[str] = frozenset(),
 ) -> tuple[str, ...] | None:
-    name = startup_file.name
+    name = _home_relative_shell_path(home, startup_file)
     if name in seen:
         return None
 
+    resolved_home = home.resolve()
+    bashrc_path = (resolved_home / ".bashrc").resolve()
     text = startup_file.read_text(encoding="utf-8", errors="ignore")
-    if _shell_sources_file(text, ".bashrc", home=home):
+    targets = tuple(
+        resolved
+        for token in _iter_shell_source_targets(text)
+        if (resolved := _resolve_home_shell_source_target(token, resolved_home)) is not None
+    )
+    if any(target == bashrc_path for target in targets):
         return (name, ".bashrc")
 
     next_seen = seen | {name}
-    for filename in _BASH_LOGIN_FILENAMES:
-        if filename == name or filename in next_seen:
+    for candidate in targets:
+        candidate_name = _home_relative_shell_path(resolved_home, candidate)
+        if candidate_name in next_seen or candidate == bashrc_path or not candidate.exists():
             continue
-        candidate = home / filename
-        if not candidate.exists() or not _shell_sources_file(text, filename, home=home):
-            continue
-        chain = _bash_startup_chain_to_bashrc(home, candidate, next_seen)
+        chain = _bash_startup_chain_to_bashrc(resolved_home, candidate, next_seen)
         if chain is not None:
             return (name, *chain)
     return None
