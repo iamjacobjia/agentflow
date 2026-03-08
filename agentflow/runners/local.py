@@ -2,14 +2,33 @@ from __future__ import annotations
 
 import asyncio
 import os
+import shlex
 from contextlib import suppress
 
 from agentflow.prepared import ExecutionPaths, PreparedExecution
 from agentflow.runners.base import RawExecutionResult, Runner, StreamCallback
-from agentflow.specs import NodeSpec
+from agentflow.specs import LocalTarget, NodeSpec
 
 
 class LocalRunner(Runner):
+    def _command_for_target(self, node: NodeSpec, prepared: PreparedExecution) -> list[str]:
+        target = node.target
+        if not isinstance(target, LocalTarget) or not target.shell:
+            return prepared.command
+
+        shell_parts = shlex.split(target.shell)
+        if not shell_parts:
+            return prepared.command
+
+        has_command_flag = any(
+            part == "--command" or (part.startswith("-") and not part.startswith("--") and "c" in part[1:])
+            for part in shell_parts[1:]
+        )
+        if not has_command_flag:
+            shell_parts.append("-lc")
+
+        return [*shell_parts, shlex.join(prepared.command)]
+
     async def _consume_stream(self, stream, stream_name: str, buffer: list[str], on_output: StreamCallback) -> None:
         while True:
             line = await stream.readline()
@@ -30,8 +49,9 @@ class LocalRunner(Runner):
         self.materialize_runtime_files(paths.host_runtime_dir, prepared.runtime_files)
         env = os.environ.copy()
         env.update(prepared.env)
+        command = self._command_for_target(node, prepared)
         process = await asyncio.create_subprocess_exec(
-            *prepared.command,
+            *command,
             cwd=prepared.cwd,
             env=env,
             stdout=asyncio.subprocess.PIPE,
