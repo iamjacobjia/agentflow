@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Awaitable, Callable
 
@@ -22,7 +23,32 @@ StreamCallback = Callable[[str, str], Awaitable[None]]
 CancelCallback = Callable[[], bool]
 
 
+@dataclass(slots=True)
+class LaunchPlan:
+    kind: str = "process"
+    command: list[str] | None = None
+    env: dict[str, str] = field(default_factory=dict)
+    cwd: str | None = None
+    stdin: str | None = None
+    runtime_files: list[str] = field(default_factory=list)
+    payload: dict[str, object] | None = None
+
+
 class Runner(ABC):
+    def plan_execution(
+        self,
+        node: NodeSpec,
+        prepared: PreparedExecution,
+        paths: ExecutionPaths,
+    ) -> LaunchPlan:
+        return LaunchPlan(
+            command=list(prepared.command),
+            env=dict(prepared.env),
+            cwd=prepared.cwd,
+            stdin=prepared.stdin,
+            runtime_files=sorted(prepared.runtime_files),
+        )
+
     @abstractmethod
     async def execute(
         self,

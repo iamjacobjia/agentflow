@@ -5,6 +5,8 @@ from pathlib import Path
 import pytest
 
 from agentflow.prepared import ExecutionPaths, PreparedExecution
+from agentflow.runners.aws_lambda import AwsLambdaRunner
+from agentflow.runners.container import ContainerRunner
 from agentflow.runners.local import LocalRunner
 from agentflow.specs import NodeSpec
 
@@ -180,6 +182,127 @@ async def test_local_runner_plain_shell_does_not_enable_login_mode(tmp_path: Pat
     assert result.exit_code == 0
     assert result.stdout_lines == ["missing"]
     assert result.stderr_lines == []
+
+
+def test_local_runner_plan_execution_includes_shell_wrapper(tmp_path: Path):
+    node = NodeSpec.model_validate(
+        {
+            "id": "plan-local",
+            "agent": "claude",
+            "prompt": "hi",
+            "target": {
+                "kind": "local",
+                "shell": "bash",
+                "shell_login": True,
+                "shell_interactive": True,
+                "shell_init": "kimi",
+            },
+        }
+    )
+    prepared = PreparedExecution(
+        command=["claude", "-p", "hello world"],
+        env={"ANTHROPIC_BASE_URL": "https://example.test"},
+        cwd=str(tmp_path),
+        trace_kind="claude",
+        runtime_files={"claude-mcp.json": "{}"},
+    )
+
+    plan = LocalRunner().plan_execution(node, prepared, _paths(tmp_path))
+
+    assert plan.kind == "process"
+    assert plan.command == ["bash", "-l", "-i", "-c", 'kimi && eval "$AGENTFLOW_TARGET_COMMAND"']
+    assert plan.cwd == str(tmp_path)
+    assert plan.runtime_files == ["claude-mcp.json"]
+    assert plan.env == {
+        "ANTHROPIC_BASE_URL": "https://example.test",
+        "AGENTFLOW_TARGET_COMMAND": "claude -p 'hello world'",
+    }
+
+
+def test_container_runner_plan_execution_shows_host_and_container_context(tmp_path: Path):
+    node = NodeSpec.model_validate(
+        {
+            "id": "plan-container",
+            "agent": "codex",
+            "prompt": "hi",
+            "target": {
+                "kind": "container",
+                "image": "ghcr.io/example/agentflow:test",
+                "extra_args": ["--network", "host"],
+            },
+        }
+    )
+    prepared = PreparedExecution(
+        command=["codex", "exec", "ping"],
+        env={"OPENAI_API_KEY": "secret"},
+        cwd="/workspace/task",
+        trace_kind="codex",
+        runtime_files={"codex_home/config.toml": "model = 'gpt-5'\n"},
+    )
+
+    plan = ContainerRunner().plan_execution(node, prepared, _paths(tmp_path))
+
+    assert plan.kind == "container"
+    assert plan.command[:6] == [
+        "docker",
+        "run",
+        "--rm",
+        "-v",
+        f"{tmp_path}:/workspace",
+        "-v",
+    ]
+    assert plan.cwd == str(tmp_path)
+    assert plan.runtime_files == ["codex_home/config.toml"]
+    assert plan.payload == {
+        "image": "ghcr.io/example/agentflow:test",
+        "engine": "docker",
+        "workdir": "/workspace/task",
+        "env": {"OPENAI_API_KEY": "secret"},
+    }
+
+
+def test_aws_lambda_runner_plan_execution_captures_invocation_request(tmp_path: Path):
+    node = NodeSpec.model_validate(
+        {
+            "id": "plan-lambda",
+            "agent": "kimi",
+            "prompt": "hi",
+            "timeout_seconds": 45,
+            "target": {
+                "kind": "aws_lambda",
+                "function_name": "agentflow-runner",
+                "region": "us-west-2",
+                "qualifier": "live",
+            },
+        }
+    )
+    prepared = PreparedExecution(
+        command=["python3", "-m", "agentflow.remote.kimi_bridge", "/tmp/request.json"],
+        env={"KIMI_API_KEY": "secret"},
+        cwd="/workspace/task",
+        trace_kind="kimi",
+        runtime_files={"kimi-request.json": "{}"},
+        stdin="input",
+    )
+
+    plan = AwsLambdaRunner().plan_execution(node, prepared, _paths(tmp_path))
+
+    assert plan.kind == "aws_lambda"
+    assert plan.runtime_files == ["kimi-request.json"]
+    assert plan.payload == {
+        "function_name": "agentflow-runner",
+        "region": "us-west-2",
+        "qualifier": "live",
+        "invocation_type": "RequestResponse",
+        "request": {
+            "command": ["python3", "-m", "agentflow.remote.kimi_bridge", "/tmp/request.json"],
+            "env": {"KIMI_API_KEY": "secret"},
+            "cwd": "/tmp/workspace",
+            "stdin": "input",
+            "timeout_seconds": 45,
+            "runtime_files": {"kimi-request.json": "{}"},
+        },
+    }
 
 
 async def _noop_output(stream_name: str, text: str) -> None:

@@ -6,7 +6,7 @@ import shlex
 from contextlib import suppress
 
 from agentflow.prepared import ExecutionPaths, PreparedExecution
-from agentflow.runners.base import RawExecutionResult, Runner, StreamCallback
+from agentflow.runners.base import LaunchPlan, RawExecutionResult, Runner, StreamCallback
 from agentflow.specs import LocalTarget, NodeSpec
 
 
@@ -69,6 +69,23 @@ class LocalRunner(Runner):
             return shell_parts, {"AGENTFLOW_TARGET_COMMAND": command_text}
 
         return [*shell_parts, command_text], {}
+
+    def plan_execution(
+        self,
+        node: NodeSpec,
+        prepared: PreparedExecution,
+        paths: ExecutionPaths,
+    ) -> LaunchPlan:
+        command, target_env = self._command_for_target(node, prepared)
+        plan_env = dict(prepared.env)
+        plan_env.update(target_env)
+        return LaunchPlan(
+            command=command,
+            env=plan_env,
+            cwd=prepared.cwd,
+            stdin=prepared.stdin,
+            runtime_files=sorted(prepared.runtime_files),
+        )
 
     def _should_suppress_stderr(self, node: NodeSpec, text: str) -> bool:
         target = node.target
