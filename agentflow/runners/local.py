@@ -11,37 +11,79 @@ from agentflow.specs import LocalTarget, NodeSpec
 
 
 class LocalRunner(Runner):
+    _INTERACTIVE_SHELL_STDERR_NOISE = (
+        "bash: cannot set terminal process group (",
+        "bash: no job control in this shell",
+    )
+
+    def _has_flag(self, shell_parts: list[str], short_flag: str, long_flag: str | None = None) -> bool:
+        return any(
+            part == long_flag or (part.startswith("-") and not part.startswith("--") and short_flag in part[1:])
+            for part in shell_parts[1:]
+        )
+
+    def _command_flag_index(self, shell_parts: list[str]) -> int | None:
+        for index, part in enumerate(shell_parts[1:], start=1):
+            if part == "--command" or (part.startswith("-") and not part.startswith("--") and "c" in part[1:]):
+                return index
+        return None
+
+    def _apply_shell_options(self, shell_parts: list[str], target: LocalTarget) -> list[str]:
+        updated = list(shell_parts)
+        command_index = self._command_flag_index(updated)
+        insert_at = command_index if command_index is not None else len(updated)
+        if target.shell_login and not self._has_flag(updated, "l", "--login"):
+            updated.insert(insert_at, "-l")
+            insert_at += 1
+        if target.shell_interactive and not self._has_flag(updated, "i"):
+            updated.insert(insert_at, "-i")
+        return updated
+
     def _command_for_target(self, node: NodeSpec, prepared: PreparedExecution) -> tuple[list[str], dict[str, str]]:
         target = node.target
         if not isinstance(target, LocalTarget) or not target.shell:
             return prepared.command, {}
 
         command_text = shlex.join(prepared.command)
+        shell_command = 'eval "$AGENTFLOW_TARGET_COMMAND"'
+        if target.shell_init:
+            shell_command = f"{target.shell_init}; {shell_command}"
+
         if "{command}" in target.shell:
-            shell_parts = shlex.split(target.shell.replace("{command}", 'eval "$AGENTFLOW_TARGET_COMMAND"'))
+            shell_parts = shlex.split(target.shell.replace("{command}", shell_command))
             if not shell_parts:
                 return prepared.command, {}
+            shell_parts = self._apply_shell_options(shell_parts, target)
             return shell_parts, {"AGENTFLOW_TARGET_COMMAND": command_text}
 
-        shell_parts = shlex.split(target.shell)
+        shell_parts = self._apply_shell_options(shlex.split(target.shell), target)
         if not shell_parts:
             return prepared.command, {}
 
-        has_command_flag = any(
-            part == "--command" or (part.startswith("-") and not part.startswith("--") and "c" in part[1:])
-            for part in shell_parts[1:]
-        )
-        if not has_command_flag:
-            shell_parts.append("-lc")
+        command_index = self._command_flag_index(shell_parts)
+        if command_index is None:
+            shell_parts.append("-c" if target.shell_login or target.shell_interactive else "-lc")
+
+        if target.shell_init:
+            shell_parts.append(shell_command)
+            return shell_parts, {"AGENTFLOW_TARGET_COMMAND": command_text}
 
         return [*shell_parts, command_text], {}
 
-    async def _consume_stream(self, stream, stream_name: str, buffer: list[str], on_output: StreamCallback) -> None:
+    def _should_suppress_stderr(self, node: NodeSpec, text: str) -> bool:
+        target = node.target
+        if not isinstance(target, LocalTarget) or not target.shell_interactive:
+            return False
+        return any(text.startswith(prefix) for prefix in self._INTERACTIVE_SHELL_STDERR_NOISE)
+
+    async def _consume_stream(self, node: NodeSpec, stream, stream_name: str, buffer: list[str], on_output: StreamCallback) -> None:
         while True:
             line = await stream.readline()
             if not line:
                 break
             text = line.decode("utf-8", errors="replace").rstrip("\n")
+            if stream_name == "stderr" and self._should_suppress_stderr(node, text):
+                continue
             buffer.append(text)
             await on_output(stream_name, text)
 
@@ -73,8 +115,8 @@ class LocalRunner(Runner):
 
         stdout_lines: list[str] = []
         stderr_lines: list[str] = []
-        stdout_task = asyncio.create_task(self._consume_stream(process.stdout, "stdout", stdout_lines, on_output))
-        stderr_task = asyncio.create_task(self._consume_stream(process.stderr, "stderr", stderr_lines, on_output))
+        stdout_task = asyncio.create_task(self._consume_stream(node, process.stdout, "stdout", stdout_lines, on_output))
+        stderr_task = asyncio.create_task(self._consume_stream(node, process.stderr, "stderr", stderr_lines, on_output))
         wait_task = asyncio.create_task(process.wait())
         deadline = asyncio.get_running_loop().time() + node.timeout_seconds
         timed_out = False

@@ -115,6 +115,9 @@ class LocalTarget(BaseModel):
     kind: Literal["local"] = "local"
     cwd: str | None = None
     shell: str | None = None
+    shell_login: bool = False
+    shell_interactive: bool = False
+    shell_init: str | None = None
 
 
 class ContainerTarget(BaseModel):
