@@ -9,6 +9,8 @@ from pathlib import Path
 
 
 _BASH_LOGIN_FILENAMES = (".bash_profile", ".bash_login", ".profile")
+_KIMI_HELPER_MISSING_EXIT_CODE = 11
+_KIMI_API_KEY_MISSING_EXIT_CODE = 13
 
 
 @dataclass(frozen=True)
@@ -118,9 +120,16 @@ def _check_kimi_shell_helper(home: Path | None = None) -> DoctorCheck:
     env = os.environ.copy()
     if home is not None:
         env["HOME"] = str(home)
+    script = "\n".join(
+        [
+            f"type {shlex.quote('kimi')} >/dev/null 2>&1 || exit {_KIMI_HELPER_MISSING_EXIT_CODE}",
+            "kimi >/dev/null || exit $?",
+            f'[ -n "${{ANTHROPIC_API_KEY:-}}" ] || exit {_KIMI_API_KEY_MISSING_EXIT_CODE}',
+        ]
+    )
     try:
         result = subprocess.run(
-            ["bash", "-lic", f"type {shlex.quote('kimi')}"] ,
+            ["bash", "-lic", script],
             check=False,
             capture_output=True,
             env=env,
@@ -136,12 +145,28 @@ def _check_kimi_shell_helper(home: Path | None = None) -> DoctorCheck:
         return DoctorCheck(
             name="kimi_shell_helper",
             status="ok",
-            detail="`kimi` is available in `bash -lic` for the bundled smoke pipeline.",
+            detail="`kimi` is available in `bash -lic` and exports `ANTHROPIC_API_KEY` for the bundled smoke pipeline.",
         )
+    if result.returncode == _KIMI_HELPER_MISSING_EXIT_CODE:
+        return DoctorCheck(
+            name="kimi_shell_helper",
+            status="failed",
+            detail="`kimi` is unavailable in `bash -lic`; add it to your bash startup files before running the bundled smoke pipeline.",
+        )
+    if result.returncode == _KIMI_API_KEY_MISSING_EXIT_CODE:
+        return DoctorCheck(
+            name="kimi_shell_helper",
+            status="failed",
+            detail=(
+                "`kimi` runs in `bash -lic`, but it does not export `ANTHROPIC_API_KEY`; "
+                "the bundled smoke pipeline will not be able to authenticate Claude-on-Kimi."
+            ),
+        )
+    detail = result.stderr.strip() or f"exit status {result.returncode}"
     return DoctorCheck(
         name="kimi_shell_helper",
         status="failed",
-        detail="`kimi` is unavailable in `bash -lic`; add it to your bash startup files before running the bundled smoke pipeline.",
+        detail=f"`kimi` failed inside `bash -lic`: {detail}",
     )
 
 
