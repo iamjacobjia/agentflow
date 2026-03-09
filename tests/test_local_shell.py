@@ -1142,6 +1142,54 @@ def test_target_bash_startup_exports_env_var_uses_shell_wrapper_env_and_bash_exe
     assert observed["env"]["HOME"] == str(home)
 
 
+@pytest.mark.parametrize("option", ["--rcfile", "--init-file"])
+def test_target_bash_startup_exports_env_var_detects_interactive_bash_rcfile(tmp_path: Path, option: str):
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / "auth.bashrc").write_text("export ANTHROPIC_API_KEY=from-rcfile\n", encoding="utf-8")
+
+    target = {
+        "kind": "local",
+        "shell": f"env HOME={home} bash {option} $HOME/auth.bashrc -ic '{{command}}'",
+    }
+
+    assert target_bash_startup_exports_env_var(target, "ANTHROPIC_API_KEY", home=tmp_path) is True
+
+
+@pytest.mark.parametrize("option", ["--rcfile", "--init-file"])
+def test_target_bash_startup_exports_env_var_passes_rcfile_to_probe_command(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    option: str,
+):
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / "auth.bashrc").write_text("export ANTHROPIC_API_KEY=from-rcfile\n", encoding="utf-8")
+    observed: dict[str, object] = {}
+
+    def fake_run(command, **kwargs):
+        observed["command"] = list(command)
+        observed["env"] = dict(kwargs["env"])
+        return subprocess.CompletedProcess(args=command, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("agentflow.local_shell.subprocess.run", fake_run)
+
+    target = {
+        "kind": "local",
+        "shell": f"env HOME={home} bash {option} $HOME/auth.bashrc -ic '{{command}}'",
+    }
+
+    assert target_bash_startup_exports_env_var(target, "ANTHROPIC_API_KEY", home=tmp_path) is True
+    assert observed["command"] == [
+        "bash",
+        "--rcfile",
+        str(home / "auth.bashrc"),
+        "-ic",
+        'test -n "${ANTHROPIC_API_KEY:-}"',
+    ]
+    assert observed["env"]["HOME"] == str(home)
+
+
 def test_target_bash_home_uses_exec_prefixed_shell_wrapper_env(tmp_path: Path):
     home = tmp_path / "home"
     home.mkdir()

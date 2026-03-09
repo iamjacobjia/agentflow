@@ -2139,6 +2139,12 @@ def probe_target_bash_startup_env_var(
     launch_env.update(shell_env)
     launch_env["HOME"] = str(effective_home)
     launch_env.pop(env_var, None)
+    rcfile_path = _shell_command_bash_rcfile_path(
+        bash_shell,
+        home=effective_home,
+        cwd=cwd,
+        env=launch_env,
+    )
 
     bash_flag = "-"
     if uses_login_bash:
@@ -2146,10 +2152,14 @@ def probe_target_bash_startup_env_var(
     if uses_interactive_bash:
         bash_flag += "i"
     bash_flag += "c"
+    probe_command = [_shell_command_program_for_target(bash_shell, "bash") or "bash"]
+    if uses_interactive_bash and rcfile_path is not None:
+        probe_command.extend(["--rcfile", str(rcfile_path)])
+    probe_command.extend([bash_flag, f'test -n "${{{env_var}:-}}"'])
 
     try:
         result = subprocess.run(
-            [_shell_command_program_for_target(bash_shell, "bash") or "bash", bash_flag, f'test -n "${{{env_var}:-}}"'],
+            probe_command,
             check=False,
             capture_output=True,
             cwd=str(_resolved_shell_cwd(cwd)),
