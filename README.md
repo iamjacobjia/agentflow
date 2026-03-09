@@ -37,6 +37,15 @@ After installation, you can invoke the CLI either as `agentflow ...` or `python 
 
 ## Quick start
 
+Scaffold a pipeline from the bundled templates:
+
+```bash
+agentflow init > pipeline.yaml
+agentflow init kimi-smoke.yaml --template local-kimi-smoke
+```
+
+The default `pipeline` template is a generic Codex/Claude/Kimi DAG. The `local-kimi-smoke` template is the same real-agent local Codex plus Claude-on-Kimi smoke DAG used by the repo's verification scripts, so it is a fast way to bootstrap a known-good local setup into your own workspace.
+
 Validate a pipeline:
 
 ```bash
