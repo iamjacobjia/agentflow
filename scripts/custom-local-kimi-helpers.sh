@@ -17,6 +17,31 @@ agentflow_repo_python() {
   printf '%s\n' "python3"
 }
 
+select_custom_local_kimi_pipeline_mode() {
+  local pipeline_mode="${AGENTFLOW_KIMI_PIPELINE_MODE:-bootstrap}"
+
+  case "$pipeline_mode" in
+    bootstrap)
+      CUSTOM_LOCAL_KIMI_PIPELINE_MODE="$pipeline_mode"
+      CUSTOM_LOCAL_KIMI_PIPELINE_SUFFIX=""
+      CUSTOM_LOCAL_KIMI_PIPELINE_LABEL="bootstrap"
+      CUSTOM_LOCAL_KIMI_EXPECTED_TRIGGER="target.bootstrap"
+      CUSTOM_LOCAL_KIMI_PIPELINE_WRITER="write_custom_local_kimi_pipeline"
+      ;;
+    shell-init)
+      CUSTOM_LOCAL_KIMI_PIPELINE_MODE="$pipeline_mode"
+      CUSTOM_LOCAL_KIMI_PIPELINE_SUFFIX="-shell-init"
+      CUSTOM_LOCAL_KIMI_PIPELINE_LABEL="shell_init"
+      CUSTOM_LOCAL_KIMI_EXPECTED_TRIGGER="target.shell_init"
+      CUSTOM_LOCAL_KIMI_PIPELINE_WRITER="write_custom_local_kimi_shell_init_pipeline"
+      ;;
+    *)
+      printf 'unsupported AGENTFLOW_KIMI_PIPELINE_MODE: %s\n' "$pipeline_mode" >&2
+      return 1
+      ;;
+  esac
+}
+
 write_custom_local_kimi_pipeline() {
   local pipeline_path="$1"
   local pipeline_name="$2"
