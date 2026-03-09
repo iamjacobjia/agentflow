@@ -1598,6 +1598,16 @@ def _parse_kimi_toolchain_probe_output(stdout: str) -> dict[str, str]:
     return parsed
 
 
+def _kimi_bootstrap_probe_preamble() -> list[str]:
+    return [
+        f"type {shlex.quote('kimi')} >/dev/null 2>&1 || exit {_KIMI_HELPER_MISSING_EXIT_CODE}",
+        "unset ANTHROPIC_API_KEY ANTHROPIC_BASE_URL",
+        "kimi >/dev/null || exit $?",
+        f'[ -n "${{ANTHROPIC_API_KEY:-}}" ] || exit {_KIMI_API_KEY_MISSING_EXIT_CODE}',
+        f'[ -n "${{ANTHROPIC_BASE_URL:-}}" ] || exit {_KIMI_BASE_URL_MISSING_EXIT_CODE}',
+    ]
+
+
 def _run_kimi_toolchain_probe(home: Path | None = None) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     if home is not None:
@@ -1605,10 +1615,7 @@ def _run_kimi_toolchain_probe(home: Path | None = None) -> subprocess.CompletedP
     expected_base_url = _EXPECTED_KIMI_ANTHROPIC_BASE_URL.rstrip("/")
     script = "\n".join(
         [
-            f"type {shlex.quote('kimi')} >/dev/null 2>&1 || exit {_KIMI_HELPER_MISSING_EXIT_CODE}",
-            "kimi >/dev/null || exit $?",
-            f'[ -n "${{ANTHROPIC_API_KEY:-}}" ] || exit {_KIMI_API_KEY_MISSING_EXIT_CODE}',
-            f'[ -n "${{ANTHROPIC_BASE_URL:-}}" ] || exit {_KIMI_BASE_URL_MISSING_EXIT_CODE}',
+            *_kimi_bootstrap_probe_preamble(),
             'printf "ANTHROPIC_BASE_URL=%s\\n" "${ANTHROPIC_BASE_URL:-}"',
             (
                 'if [ "${ANTHROPIC_BASE_URL%/}" != "'
@@ -1846,10 +1853,7 @@ def _check_kimi_shell_helper(home: Path | None = None) -> DoctorCheck:
     expected_base_url = _EXPECTED_KIMI_ANTHROPIC_BASE_URL.rstrip("/")
     script = "\n".join(
         [
-            f"type {shlex.quote('kimi')} >/dev/null 2>&1 || exit {_KIMI_HELPER_MISSING_EXIT_CODE}",
-            "kimi >/dev/null || exit $?",
-            f'[ -n "${{ANTHROPIC_API_KEY:-}}" ] || exit {_KIMI_API_KEY_MISSING_EXIT_CODE}',
-            f'[ -n "${{ANTHROPIC_BASE_URL:-}}" ] || exit {_KIMI_BASE_URL_MISSING_EXIT_CODE}',
+            *_kimi_bootstrap_probe_preamble(),
             (
                 'if [ "${ANTHROPIC_BASE_URL%/}" != "'
                 f'{expected_base_url}'
@@ -1909,10 +1913,7 @@ def _check_kimi_bootstrap_helper(home: Path | None = None) -> DoctorCheck:
     expected_base_url = _EXPECTED_KIMI_ANTHROPIC_BASE_URL.rstrip("/")
     script = "\n".join(
         [
-            f"type {shlex.quote('kimi')} >/dev/null 2>&1 || exit {_KIMI_HELPER_MISSING_EXIT_CODE}",
-            "kimi >/dev/null || exit $?",
-            f'[ -n "${{ANTHROPIC_API_KEY:-}}" ] || exit {_KIMI_API_KEY_MISSING_EXIT_CODE}',
-            f'[ -n "${{ANTHROPIC_BASE_URL:-}}" ] || exit {_KIMI_BASE_URL_MISSING_EXIT_CODE}',
+            *_kimi_bootstrap_probe_preamble(),
             (
                 'if [ "${ANTHROPIC_BASE_URL%/}" != "'
                 f'{expected_base_url}'

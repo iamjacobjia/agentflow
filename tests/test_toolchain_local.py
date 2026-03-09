@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import textwrap
 from pathlib import Path
 
 from typer.testing import CliRunner
@@ -16,6 +17,11 @@ from agentflow.doctor import (
 
 
 runner = CliRunner()
+
+
+def _write_executable(path: Path, body: str) -> None:
+    path.write_text(f"#!/usr/bin/env bash\nset -euo pipefail\n{body}", encoding="utf-8")
+    path.chmod(0o755)
 
 
 def _write_login_shell_home(home: Path) -> None:
@@ -89,6 +95,42 @@ def test_build_local_kimi_toolchain_report_keeps_base_url_on_failure(
         "`kimi` runs in `bash -lic`, but `ANTHROPIC_BASE_URL` is `https://kimi.invalid/` "
         "instead of `https://api.kimi.com/coding/`; the bundled smoke pipeline will not be able "
         "to route Claude through Kimi."
+    )
+
+
+def test_build_local_kimi_toolchain_report_requires_kimi_to_export_anthropic_env(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    bin_dir = home / "bin"
+    bin_dir.mkdir()
+    (home / ".profile").write_text('if [ -f "$HOME/.bashrc" ]; then . "$HOME/.bashrc"; fi\n', encoding="utf-8")
+    (home / ".bashrc").write_text(
+        'export PATH="$HOME/bin:$PATH"\n'
+        "kimi() {\n"
+        f"{textwrap.indent(':', '  ')}\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    _write_executable(
+        bin_dir / "codex",
+        'if [ "${1:-}" = "login" ] && [ "${2:-}" = "status" ]; then\n'
+        "  exit 0\n"
+        "fi\n"
+        'printf "codex-cli 0.0.0\\n"\n',
+    )
+    _write_executable(bin_dir / "claude", 'printf "Claude Code 0.0.0\\n"\n')
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "ambient-kimi-key")
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://api.kimi.com/coding/")
+
+    report = build_local_kimi_toolchain_report(home=home)
+
+    assert report.status == "failed"
+    assert report.detail == (
+        "`kimi` runs in `bash -lic`, but it does not export `ANTHROPIC_API_KEY`; "
+        "the bundled smoke pipeline will not be able to authenticate Claude-on-Kimi."
     )
 
 

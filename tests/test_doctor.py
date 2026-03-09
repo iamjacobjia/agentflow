@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import textwrap
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -35,6 +36,32 @@ _KIMI_HELPER_OK_DETAIL = (
     "sets `ANTHROPIC_BASE_URL=https://api.kimi.com/coding/`, keeps both `claude` and `codex` available, "
     "and confirms Codex authentication is ready via `codex login status` or `OPENAI_API_KEY` for the bundled smoke pipeline."
 )
+
+
+def _write_executable(path: Path, body: str) -> None:
+    path.write_text(f"#!/usr/bin/env bash\nset -euo pipefail\n{body}", encoding="utf-8")
+    path.chmod(0o755)
+
+
+def _write_local_kimi_shell_home(home: Path, *, kimi_body: str = ":") -> None:
+    bin_dir = home / "bin"
+    bin_dir.mkdir(parents=True)
+    (home / ".profile").write_text('if [ -f "$HOME/.bashrc" ]; then . "$HOME/.bashrc"; fi\n', encoding="utf-8")
+    (home / ".bashrc").write_text(
+        'export PATH="$HOME/bin:$PATH"\n'
+        "kimi() {\n"
+        f"{textwrap.indent(kimi_body.rstrip(), '  ')}\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    _write_executable(
+        bin_dir / "codex",
+        'if [ "${1:-}" = "login" ] && [ "${2:-}" = "status" ]; then\n'
+        "  exit 0\n"
+        "fi\n"
+        'printf "codex-cli 0.0.0\\n"\n',
+    )
+    _write_executable(bin_dir / "claude", 'printf "Claude Code 0.0.0\\n"\n')
 
 
 def _startup_context(
@@ -672,6 +699,26 @@ def test_local_kimi_bootstrap_doctor_report_accepts_runtime_ready_shell_without_
     }
 
 
+def test_local_kimi_bootstrap_doctor_report_requires_kimi_to_export_anthropic_env(
+    tmp_path: Path,
+    monkeypatch,
+):
+    home = tmp_path / "home"
+    home.mkdir()
+    _write_local_kimi_shell_home(home)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "ambient-kimi-key")
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://api.kimi.com/coding/")
+
+    report = build_local_kimi_bootstrap_doctor_report(home=home)
+
+    assert report.status == "failed"
+    assert report.as_dict()["checks"][-1] == {
+        "name": "kimi_shell_helper",
+        "status": "failed",
+        "detail": "`kimi` runs in `bash -lic`, but it does not export `ANTHROPIC_API_KEY`.",
+    }
+
+
 def test_local_smoke_doctor_report_includes_host_cli_versions(tmp_path: Path, monkeypatch):
     home = tmp_path / "home"
     home.mkdir()
@@ -740,6 +787,25 @@ def test_check_kimi_shell_helper_fails_when_probe_times_out(monkeypatch):
         "name": "kimi_shell_helper",
         "status": "failed",
         "detail": "`kimi` verification in `bash -lic` did not finish: `bash -lic '<inline shell probe>'` timed out after 15s.",
+    }
+
+
+def test_check_kimi_shell_helper_requires_kimi_to_export_anthropic_env(tmp_path: Path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    _write_local_kimi_shell_home(home)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "ambient-kimi-key")
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://api.kimi.com/coding/")
+
+    check = _check_kimi_shell_helper(home=home)
+
+    assert check.as_dict() == {
+        "name": "kimi_shell_helper",
+        "status": "failed",
+        "detail": (
+            "`kimi` runs in `bash -lic`, but it does not export `ANTHROPIC_API_KEY`; "
+            "the bundled smoke pipeline will not be able to authenticate Claude-on-Kimi."
+        ),
     }
 
 
