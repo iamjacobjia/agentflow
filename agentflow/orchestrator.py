@@ -25,6 +25,7 @@ class Orchestrator:
     max_concurrent_runs: int = 2
     _run_slots: threading.Semaphore = field(init=False, repr=False)
     _cancel_flags: dict[str, threading.Event] = field(default_factory=dict, init=False, repr=False)
+    _run_finished: dict[str, threading.Event] = field(default_factory=dict, init=False, repr=False)
 
     def __post_init__(self) -> None:
         self._run_slots = threading.Semaphore(self.max_concurrent_runs)
@@ -38,20 +39,23 @@ class Orchestrator:
             nodes={node.id: NodeResult(node_id=node.id, status=NodeStatus.PENDING) for node in pipeline.nodes},
         )
         self._cancel_flags[run_id] = threading.Event()
+        self._run_finished[run_id] = threading.Event()
         await self.store.create_run(run)
         await self._publish(run_id, "run_queued", pipeline=pipeline.model_dump(mode="json"))
 
         def _background() -> None:
             acquired = False
-            while not acquired:
-                if self._should_cancel(run_id):
-                    asyncio.run(self._finalize_cancelled_queue_run(run_id))
-                    return
-                acquired = self._run_slots.acquire(timeout=0.1)
             try:
+                while not acquired:
+                    if self._should_cancel(run_id):
+                        asyncio.run(self._finalize_cancelled_queue_run(run_id))
+                        return
+                    acquired = self._run_slots.acquire(timeout=0.1)
                 asyncio.run(self.run(run_id))
             finally:
-                self._run_slots.release()
+                if acquired:
+                    self._run_slots.release()
+                self._run_finished[run_id].set()
 
         threading.Thread(target=_background, name=f"agentflow-{run_id}", daemon=True).start()
         return run
@@ -63,7 +67,9 @@ class Orchestrator:
             while True:
                 record = self.store.get_run(run_id)
                 if record.status in terminal:
-                    return record
+                    finished = self._run_finished.get(run_id)
+                    if finished is None or finished.is_set():
+                        return record
                 await asyncio.sleep(0.05)
 
         if timeout is None:

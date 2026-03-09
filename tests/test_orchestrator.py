@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 from datetime import datetime
 from pathlib import Path
 
@@ -89,6 +90,25 @@ def make_orchestrator(tmp_path: Path) -> Orchestrator:
     return Orchestrator(store=RunStore(tmp_path / "runs"), adapters=adapters, runners=RunnerRegistry())
 
 
+class BlockingTerminalPersistRunStore(RunStore):
+    def __init__(self, base_dir: str | Path) -> None:
+        super().__init__(base_dir)
+        self.terminal_persist_started = threading.Event()
+        self.allow_terminal_persist = threading.Event()
+
+    async def persist_run(self, run_id: str) -> None:
+        record = self._runs[run_id]
+        if record.status in {
+            "completed",
+            "failed",
+            "cancelled",
+        } or getattr(record.status, "value", None) in {"completed", "failed", "cancelled"}:
+            self.terminal_persist_started.set()
+            while not self.allow_terminal_persist.is_set():
+                await asyncio.sleep(0.01)
+        await super().persist_run(run_id)
+
+
 @pytest.mark.asyncio
 async def test_orchestrator_runs_parallel_and_templates_outputs(tmp_path: Path):
     orchestrator = make_orchestrator(tmp_path)
@@ -126,6 +146,37 @@ async def test_orchestrator_runs_parallel_and_templates_outputs(tmp_path: Path):
     beta_start = datetime.fromisoformat(beta.started_at)
     assert abs((alpha_start - beta_start).total_seconds()) < 0.15
     assert elapsed < 1.0
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_waits_for_terminal_persist_before_returning(tmp_path: Path):
+    adapters = AdapterRegistry()
+    adapters.register(AgentKind.CODEX, MockAdapter())
+    store = BlockingTerminalPersistRunStore(tmp_path / "runs")
+    orchestrator = Orchestrator(store=store, adapters=adapters, runners=RunnerRegistry())
+    pipeline = PipelineSpec.model_validate(
+        {
+            "name": "persist-before-wait-return",
+            "working_dir": str(tmp_path),
+            "nodes": [
+                {"id": "alpha", "agent": "codex", "prompt": "alpha"},
+            ],
+        }
+    )
+
+    run = await orchestrator.submit(pipeline)
+    wait_task = asyncio.create_task(orchestrator.wait(run.id, timeout=5))
+
+    await asyncio.to_thread(store.terminal_persist_started.wait, 5)
+    await asyncio.sleep(0.1)
+    assert wait_task.done() is False
+
+    store.allow_terminal_persist.set()
+    completed = await asyncio.wait_for(wait_task, timeout=5)
+
+    assert completed.status.value == "completed"
+    reloaded = RunStore(tmp_path / "runs")
+    assert reloaded.get_run(run.id).status.value == "completed"
 
 
 @pytest.mark.asyncio
