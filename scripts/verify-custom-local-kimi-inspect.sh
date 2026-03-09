@@ -4,11 +4,13 @@ set -euo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
 . "$script_dir/custom-local-kimi-helpers.sh"
+select_custom_local_kimi_pipeline_mode
 
 python_bin="$(agentflow_repo_python "$repo_root")"
 
 tmpdir="$(mktemp -d)"
-inspect_path="$tmpdir/custom-kimi-inspect.yaml"
+pipeline_name="custom-kimi${CUSTOM_LOCAL_KIMI_PIPELINE_SUFFIX}-inspect"
+inspect_path="$tmpdir/${pipeline_name}.yaml"
 stdout_path="$tmpdir/inspect.stdout"
 
 cleanup() {
@@ -28,10 +30,10 @@ cleanup() {
 
 trap cleanup EXIT
 
-write_custom_local_kimi_pipeline \
+"$CUSTOM_LOCAL_KIMI_PIPELINE_WRITER" \
   "$inspect_path" \
-  "custom-kimi-inspect" \
-  "Temporary external inspect test for local Codex plus Claude-on-Kimi."
+  "$pipeline_name" \
+  "Temporary external inspect test for local Codex plus Claude-on-Kimi via ${CUSTOM_LOCAL_KIMI_PIPELINE_LABEL}."
 
 printf "custom inspect pipeline path: %s\n" "$inspect_path"
 
@@ -40,25 +42,48 @@ printf "custom inspect pipeline path: %s\n" "$inspect_path"
   "$python_bin" -m agentflow inspect "$inspect_path" --output summary >"$stdout_path"
 )
 
-PIPELINE_DIR="$tmpdir" STDOUT_PATH="$stdout_path" "$python_bin" - <<'PY'
+PIPELINE_DIR="$tmpdir" STDOUT_PATH="$stdout_path" EXPECTED_TRIGGER="$CUSTOM_LOCAL_KIMI_EXPECTED_TRIGGER" EXPECTED_PIPELINE_NAME="$pipeline_name" EXPECTED_LAUNCH="$(
+  case "$CUSTOM_LOCAL_KIMI_PIPELINE_MODE" in
+    bootstrap)
+      printf "%s" "Launch: bash -l -i -c 'command -v kimi >/dev/null 2>&1 && kimi && eval \"\$AGENTFLOW_TARGET_COMMAND\"'"
+      ;;
+    shell-init)
+      printf "%s" "Launch: bash -l -i -c 'kimi && eval \"\$AGENTFLOW_TARGET_COMMAND\"'"
+      ;;
+  esac
+)" EXPECTED_BOOTSTRAP="$(
+  case "$CUSTOM_LOCAL_KIMI_PIPELINE_MODE" in
+    bootstrap)
+      printf "%s" "Bootstrap: preset=kimi, shell=bash, login=true, startup="
+      ;;
+    shell-init)
+      printf "%s" "Bootstrap: shell=bash, login=true, startup="
+      ;;
+  esac
+)" "$python_bin" - <<'PY'
 import os
 from pathlib import Path
 
 pipeline_dir = Path(os.environ["PIPELINE_DIR"]).resolve()
 stdout_path = Path(os.environ["STDOUT_PATH"])
 stdout_text = stdout_path.read_text(encoding="utf-8")
+expected_trigger = os.environ["EXPECTED_TRIGGER"]
+expected_pipeline_name = os.environ["EXPECTED_PIPELINE_NAME"]
+expected_launch = os.environ["EXPECTED_LAUNCH"]
+expected_bootstrap = os.environ["EXPECTED_BOOTSTRAP"]
 
 required_fragments = (
-    "Pipeline: custom-kimi-inspect",
+    f"Pipeline: {expected_pipeline_name}",
     f"Working dir: {pipeline_dir}",
     "Auto preflight: enabled - local Codex/Claude/Kimi nodes use a `kimi` shell bootstrap.",
-    "Auto preflight matches: codex_plan (codex) via `target.bootstrap`, claude_review (claude) via `target.bootstrap`",
+    f"Auto preflight matches: codex_plan (codex) via `{expected_trigger}`, claude_review (claude) via `{expected_trigger}`",
     "- codex_plan [codex/local]",
     "- claude_review [claude/local]",
     "Provider: kimi, key=ANTHROPIC_API_KEY, url=https://api.kimi.com/coding/",
+    expected_bootstrap,
     "Prepared: codex exec",
     "Prepared: claude -p",
-    "Launch: bash -l -i -c 'command -v kimi >/dev/null 2>&1 && kimi && eval \"$AGENTFLOW_TARGET_COMMAND\"'",
+    expected_launch,
 )
 
 for fragment in required_fragments:

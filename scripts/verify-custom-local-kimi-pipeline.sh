@@ -4,28 +4,12 @@ set -euo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
 . "$script_dir/custom-local-kimi-helpers.sh"
+select_custom_local_kimi_pipeline_mode
 
 python_bin="$(agentflow_repo_python "$repo_root")"
-pipeline_mode="${AGENTFLOW_KIMI_PIPELINE_MODE:-bootstrap}"
-
-case "$pipeline_mode" in
-  bootstrap)
-    pipeline_name="custom-kimi-check-local"
-    pipeline_description="Temporary external real-agent check-local test for local Codex plus Claude-on-Kimi."
-    expected_trigger="target.bootstrap"
-    pipeline_writer="write_custom_local_kimi_pipeline"
-    ;;
-  shell-init)
-    pipeline_name="custom-kimi-shell-init-check-local"
-    pipeline_description="Temporary external real-agent check-local test for local Codex plus Claude-on-Kimi via shell_init."
-    expected_trigger="target.shell_init"
-    pipeline_writer="write_custom_local_kimi_shell_init_pipeline"
-    ;;
-  *)
-    printf 'unsupported AGENTFLOW_KIMI_PIPELINE_MODE: %s\n' "$pipeline_mode" >&2
-    exit 1
-    ;;
-esac
+pipeline_name="custom-kimi${CUSTOM_LOCAL_KIMI_PIPELINE_SUFFIX}-check-local"
+pipeline_description="Temporary external real-agent check-local test for local Codex plus Claude-on-Kimi via ${CUSTOM_LOCAL_KIMI_PIPELINE_LABEL}."
+expected_trigger="$CUSTOM_LOCAL_KIMI_EXPECTED_TRIGGER"
 
 tmpdir="$(mktemp -d)"
 pipeline_path="$tmpdir/${pipeline_name}.yaml"
@@ -53,7 +37,7 @@ cleanup() {
 
 trap cleanup EXIT
 
-"$pipeline_writer" \
+"$CUSTOM_LOCAL_KIMI_PIPELINE_WRITER" \
   "$pipeline_path" \
   "$pipeline_name" \
   "$pipeline_description"
