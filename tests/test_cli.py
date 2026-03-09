@@ -4792,6 +4792,65 @@ nodes:
     ]
 
 
+def test_doctor_with_pipeline_path_warns_when_local_launch_inherits_current_base_url(tmp_path, monkeypatch):
+    pipeline_path = tmp_path / "pipeline.yaml"
+    pipeline_path.write_text(
+        """name: doctor-base-url-inheritance
+working_dir: .
+nodes:
+  - id: review
+    agent: claude
+    prompt: hi
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(agentflow.cli, "build_pipeline_local_claude_readiness_checks", lambda pipeline: [])
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://open.bigmodel.cn/api/anthropic")
+
+    result = runner.invoke(app, ["doctor", str(pipeline_path), "--output", "summary"])
+
+    assert result.exit_code == 0
+    assert result.stdout == (
+        "Doctor: warning\n"
+        "- launch_env_inheritance: warning - Node `review`: Launch inherits current `ANTHROPIC_BASE_URL` value `https://open.bigmodel.cn/api/anthropic`; configure `provider` or `node.env` explicitly if you want Claude routing pinned for this node.\n"
+        "Pipeline auto preflight: disabled - path does not match the bundled smoke pipeline and no local Codex/Claude/Kimi node uses `kimi` bootstrap.\n"
+    )
+
+
+def test_doctor_with_pipeline_path_json_includes_launch_env_inheritance_context(tmp_path, monkeypatch):
+    pipeline_path = tmp_path / "pipeline.yaml"
+    pipeline_path.write_text(
+        """name: doctor-base-url-inheritance-json
+working_dir: .
+nodes:
+  - id: review
+    agent: claude
+    prompt: hi
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(agentflow.cli, "build_pipeline_local_claude_readiness_checks", lambda pipeline: [])
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://open.bigmodel.cn/api/anthropic")
+
+    result = runner.invoke(app, ["doctor", str(pipeline_path), "--output", "json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["checks"] == [
+        {
+            "name": "launch_env_inheritance",
+            "status": "warning",
+            "detail": "Node `review`: Launch inherits current `ANTHROPIC_BASE_URL` value `https://open.bigmodel.cn/api/anthropic`; configure `provider` or `node.env` explicitly if you want Claude routing pinned for this node.",
+            "context": {
+                "node_id": "review",
+                "key": "ANTHROPIC_BASE_URL",
+                "current_value": "https://open.bigmodel.cn/api/anthropic",
+                "source": "current environment",
+            },
+        }
+    ]
+
+
 def test_doctor_without_path_reports_bundled_smoke_override_as_ok(tmp_path, monkeypatch):
     pipeline_path = tmp_path / "bundled-smoke.yaml"
     pipeline_path.write_text(

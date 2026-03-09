@@ -366,7 +366,7 @@ def _extend_doctor_report(report: object, extra_checks: list[DoctorCheck]) -> ob
     return replace(report, status=next_status, checks=[*current_checks, *extra_checks])
 
 
-def _pipeline_launch_env_override_checks(pipeline: object) -> list[DoctorCheck]:
+def _pipeline_launch_inspection_nodes(pipeline: object) -> list[dict[str, object]]:
     from agentflow.inspection import build_launch_inspection
 
     try:
@@ -377,8 +377,17 @@ def _pipeline_launch_env_override_checks(pipeline: object) -> list[DoctorCheck]:
     except Exception:
         return []
 
+    nodes = report.get("nodes")
+    if not isinstance(nodes, list):
+        return []
+
+    return [node for node in nodes if isinstance(node, dict)]
+
+
+def _pipeline_launch_env_override_checks(nodes: list[dict[str, object]]) -> list[DoctorCheck]:
+    
     checks: list[DoctorCheck] = []
-    for node in report.get("nodes", []):
+    for node in nodes:
         node_id = str(node.get("id") or "node")
         for override in node.get("launch_env_overrides", []) or []:
             if not isinstance(override, dict):
@@ -432,6 +441,34 @@ def _pipeline_launch_env_override_checks(pipeline: object) -> list[DoctorCheck]:
                     status=status,
                     detail=detail,
                     context=context,
+                )
+            )
+    return checks
+
+
+def _pipeline_launch_env_inheritance_checks(nodes: list[dict[str, object]]) -> list[DoctorCheck]:
+    checks: list[DoctorCheck] = []
+    for node in nodes:
+        node_id = str(node.get("id") or "node")
+        agent_name = str(node.get("agent") or "agent").capitalize()
+        for inheritance in node.get("launch_env_inheritances", []) or []:
+            if not isinstance(inheritance, dict):
+                continue
+            key = str(inheritance.get("key") or "")
+            current_value = str(inheritance.get("current_value") or "")
+            if not key or not current_value:
+                continue
+
+            detail = (
+                f"Node `{node_id}`: Launch inherits current `{key}` value `{current_value}`; configure `provider` "
+                f"or `node.env` explicitly if you want {agent_name} routing pinned for this node."
+            )
+            checks.append(
+                DoctorCheck(
+                    name="launch_env_inheritance",
+                    status="warning",
+                    detail=detail,
+                    context={"node_id": node_id, **inheritance},
                 )
             )
     return checks
@@ -733,7 +770,15 @@ def _augment_preflight_report(report: object, pipeline: object) -> object:
     )
     if _status_value(getattr(report, "status", "ok")) == "failed":
         return report
-    return _extend_doctor_report(report, _pipeline_launch_env_override_checks(pipeline))
+
+    inspection_nodes = _pipeline_launch_inspection_nodes(pipeline)
+    return _extend_doctor_report(
+        report,
+        [
+            *_pipeline_launch_env_override_checks(inspection_nodes),
+            *_pipeline_launch_env_inheritance_checks(inspection_nodes),
+        ],
+    )
 
 
 def _auto_smoke_preflight_reason(path: str, pipeline: object) -> str | None:
