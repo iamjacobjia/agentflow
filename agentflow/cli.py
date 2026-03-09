@@ -22,8 +22,10 @@ from agentflow.defaults import (
 from agentflow.doctor import (
     DoctorCheck,
     DoctorReport,
+    LocalToolchainReport,
     ShellBridgeRecommendation,
     build_bash_login_shell_bridge_recommendation,
+    build_local_kimi_toolchain_report,
     build_local_kimi_bootstrap_doctor_report,
     build_pipeline_local_claude_readiness_checks,
     build_pipeline_local_claude_readiness_info_checks,
@@ -1585,6 +1587,47 @@ def _echo_doctor_report(
     )
 
 
+def _render_local_toolchain_summary(report: LocalToolchainReport) -> str:
+    lines = [f"Toolchain: {report.status}"]
+    startup_order = ("~/.bash_profile", "~/.bash_login", "~/.profile")
+    for path in startup_order:
+        lines.append(f"{path}: {report.startup_files.get(path, 'missing')}")
+    lines.append(f"bash login startup: {report.bash_login_startup}")
+    if report.shell_bridge is None:
+        lines.append("bash login bridge: not needed")
+    else:
+        lines.append(f"bash login bridge target: {report.shell_bridge.target}")
+        lines.append(f"bash login bridge source: {report.shell_bridge.source}")
+        lines.append(f"bash login bridge reason: {report.shell_bridge.reason}")
+        lines.append("bash login bridge snippet:")
+        for line in report.shell_bridge.snippet.rstrip().splitlines():
+            lines.append(f"  {line}")
+    if report.anthropic_base_url:
+        lines.append(f"ANTHROPIC_BASE_URL={report.anthropic_base_url}")
+    if report.codex_auth:
+        lines.append(f"codex auth: {report.codex_auth}")
+    if report.codex_version:
+        lines.append(f"codex: {report.codex_version}")
+    if report.claude_version:
+        lines.append(f"claude: {report.claude_version}")
+    if report.detail:
+        lines.append(f"detail: {report.detail}")
+    return "\n".join(lines)
+
+
+def _echo_local_toolchain_report(
+    report: LocalToolchainReport,
+    *,
+    output: StructuredOutputFormat = StructuredOutputFormat.AUTO,
+) -> None:
+    resolved_output = _resolve_structured_output(output, err=False)
+    if resolved_output == StructuredOutputFormat.SUMMARY:
+        typer.echo(_render_local_toolchain_summary(report))
+        return
+
+    typer.echo(json.dumps(report.as_dict(), indent=2))
+
+
 def _check_local_pipeline_context(pipeline: dict[str, object] | None) -> dict[str, object] | None:
     if not isinstance(pipeline, dict):
         return pipeline
@@ -1888,6 +1931,19 @@ def check_local(
     if report.status == "failed":
         raise typer.Exit(code=1)
     _run_pipeline(_loaded_pipeline if _loaded_pipeline is not None else _load_pipeline(selected_path), runs_dir, max_concurrent_runs, output)
+
+
+@app.command("toolchain-local")
+def toolchain_local(
+    output: StructuredOutputFormat = typer.Option(
+        StructuredOutputFormat.AUTO,
+        "--output",
+        help="Result output format. Defaults to `summary` on a terminal and `json` otherwise.",
+    ),
+) -> None:
+    report = build_local_kimi_toolchain_report()
+    _echo_local_toolchain_report(report, output=output)
+    raise typer.Exit(code=0 if report.status == "ok" else 1)
 
 
 @app.command()

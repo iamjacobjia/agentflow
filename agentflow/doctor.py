@@ -18,6 +18,7 @@ from agentflow.local_shell import (
     summarize_bash_login_startup_file_statuses,
     kimi_shell_init_requires_bash_warning,
     kimi_shell_init_requires_interactive_bash_warning,
+    summarize_target_bash_login_startup,
 )
 from agentflow.prepared import PreparedExecution, build_execution_paths
 from agentflow.runners.local import LocalRunner
@@ -377,6 +378,38 @@ class ShellBridgeRecommendation:
 
     def as_dict(self) -> dict[str, str]:
         return asdict(self)
+
+
+@dataclass(frozen=True)
+class LocalToolchainReport:
+    status: str
+    startup_files: dict[str, str]
+    bash_login_startup: str
+    shell_bridge: ShellBridgeRecommendation | None
+    anthropic_base_url: str | None = None
+    codex_auth: str | None = None
+    codex_version: str | None = None
+    claude_version: str | None = None
+    detail: str | None = None
+
+    def as_dict(self) -> dict[str, object]:
+        payload: dict[str, object] = {
+            "status": self.status,
+            "startup_files": dict(self.startup_files),
+            "bash_login_startup": self.bash_login_startup,
+            "shell_bridge": None if self.shell_bridge is None else self.shell_bridge.as_dict(),
+        }
+        if self.anthropic_base_url is not None:
+            payload["anthropic_base_url"] = self.anthropic_base_url
+        if self.codex_auth is not None:
+            payload["codex_auth"] = self.codex_auth
+        if self.codex_version is not None:
+            payload["codex_version"] = self.codex_version
+        if self.claude_version is not None:
+            payload["claude_version"] = self.claude_version
+        if self.detail is not None:
+            payload["detail"] = self.detail
+        return payload
 
 
 def _dict_env(env: object) -> dict[str, str]:
@@ -1553,7 +1586,19 @@ def build_bash_login_shell_bridge_recommendation(home: Path | None = None) -> Sh
     )
 
 
-def _check_kimi_shell_helper(home: Path | None = None) -> DoctorCheck:
+def _parse_kimi_toolchain_probe_output(stdout: str) -> dict[str, str]:
+    parsed: dict[str, str] = {}
+    for raw_line in stdout.splitlines():
+        line = raw_line.strip()
+        if not line or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        if key in {"ANTHROPIC_BASE_URL", "CODEX_AUTH", "CODEX_VERSION", "CLAUDE_VERSION"}:
+            parsed[key] = value.strip()
+    return parsed
+
+
+def _run_kimi_toolchain_probe(home: Path | None = None) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     if home is not None:
         env["HOME"] = str(home)
@@ -1564,55 +1609,46 @@ def _check_kimi_shell_helper(home: Path | None = None) -> DoctorCheck:
             "kimi >/dev/null || exit $?",
             f'[ -n "${{ANTHROPIC_API_KEY:-}}" ] || exit {_KIMI_API_KEY_MISSING_EXIT_CODE}',
             f'[ -n "${{ANTHROPIC_BASE_URL:-}}" ] || exit {_KIMI_BASE_URL_MISSING_EXIT_CODE}',
+            'printf "ANTHROPIC_BASE_URL=%s\\n" "${ANTHROPIC_BASE_URL:-}"',
             (
                 'if [ "${ANTHROPIC_BASE_URL%/}" != "'
                 f'{expected_base_url}'
                 '" ]; then '
-                'printf "%s" "${ANTHROPIC_BASE_URL:-}"; '
                 f'exit {_KIMI_BASE_URL_MISMATCH_EXIT_CODE}; '
-                'fi'
-            ),
-            f"type {shlex.quote('claude')} >/dev/null 2>&1 || exit {_CLAUDE_IN_SHELL_MISSING_EXIT_CODE}",
-            f"{shlex.quote('claude')} --version >/dev/null 2>&1 || exit {_CLAUDE_AFTER_KIMI_VERSION_FAILED_EXIT_CODE}",
-            f"type {shlex.quote('codex')} >/dev/null 2>&1 || exit {_CODEX_AFTER_KIMI_MISSING_EXIT_CODE}",
-            f"{shlex.quote('codex')} --version >/dev/null 2>&1 || exit {_CODEX_AFTER_KIMI_VERSION_FAILED_EXIT_CODE}",
-            (
-                'if [ -n "${OPENAI_API_KEY:-}" ]; then '
-                f"{shlex.quote('codex')} login status >/dev/null 2>&1 && exit "
-                f"{_CODEX_AUTH_VIA_API_KEY_AND_LOGIN_STATUS_EXIT_CODE}; "
-                f"exit {_CODEX_AUTH_VIA_API_KEY_EXIT_CODE}; "
                 "fi"
             ),
+            f"type {shlex.quote('claude')} >/dev/null 2>&1 || exit {_CLAUDE_IN_SHELL_MISSING_EXIT_CODE}",
+            f"type {shlex.quote('codex')} >/dev/null 2>&1 || exit {_CODEX_AFTER_KIMI_MISSING_EXIT_CODE}",
+            "codex_auth_sources=()",
+            'if [ -n "${OPENAI_API_KEY:-}" ]; then codex_auth_sources+=("OPENAI_API_KEY"); fi',
             (
-                f"{shlex.quote('codex')} login status >/dev/null 2>&1 && exit "
-                f"{_CODEX_AUTH_VIA_LOGIN_STATUS_EXIT_CODE}"
+                f"{shlex.quote('codex')} login status >/dev/null 2>&1 && "
+                'codex_auth_sources+=("login")'
             ),
-            f"exit {_CODEX_LOGIN_STATUS_AFTER_KIMI_FAILED_EXIT_CODE}",
+            f'[ "${{#codex_auth_sources[@]}}" -gt 0 ] || exit {_CODEX_LOGIN_STATUS_AFTER_KIMI_FAILED_EXIT_CODE}',
+            'codex_auth_label="${codex_auth_sources[0]}"',
+            'for codex_auth_source in "${codex_auth_sources[@]:1}"; do '
+            'codex_auth_label="${codex_auth_label} + ${codex_auth_source}"; '
+            "done",
+            'printf "CODEX_AUTH=%s\\n" "$codex_auth_label"',
+            f'claude_version="$({shlex.quote("claude")} --version 2>/dev/null)" || exit {_CLAUDE_AFTER_KIMI_VERSION_FAILED_EXIT_CODE}',
+            'claude_version="${claude_version%%$\'\\n\'*}"',
+            'printf "CLAUDE_VERSION=%s\\n" "$claude_version"',
+            f'codex_version="$({shlex.quote("codex")} --version 2>/dev/null)" || exit {_CODEX_AFTER_KIMI_VERSION_FAILED_EXIT_CODE}',
+            'codex_version="${codex_version%%$\'\\n\'*}"',
+            'printf "CODEX_VERSION=%s\\n" "$codex_version"',
         ]
     )
-    try:
-        result = _run_doctor_subprocess(
-            ["bash", "-lic", script],
-            check=False,
-            capture_output=True,
-            env=env,
-            text=True,
-        )
-    except OSError as exc:
-        return DoctorCheck(
-            name="kimi_shell_helper",
-            status="failed",
-            detail=f"Could not launch `bash -lic` to verify `kimi`, `claude`, and `codex`: {exc}",
-        )
-    except _DoctorSubprocessTimeout as exc:
-        return DoctorCheck(
-            name="kimi_shell_helper",
-            status="failed",
-            detail=(
-                f"`kimi` verification in `bash -lic` did not finish: "
-                f"{_doctor_timeout_detail(exc.command_text, exc.timeout_seconds)}."
-            ),
-        )
+    return _run_doctor_subprocess(
+        ["bash", "-lic", script],
+        check=False,
+        capture_output=True,
+        env=env,
+        text=True,
+    )
+
+
+def _kimi_shell_helper_check_from_probe(result: subprocess.CompletedProcess[str]) -> DoctorCheck:
     auth_source = _resolved_local_codex_auth_source(
         result.returncode,
         api_key_env="OPENAI_API_KEY",
@@ -1701,7 +1737,7 @@ def _check_kimi_shell_helper(home: Path | None = None) -> DoctorCheck:
             ),
         )
     if result.returncode == _KIMI_BASE_URL_MISMATCH_EXIT_CODE:
-        actual_base_url = result.stdout.strip() or "<empty>"
+        actual_base_url = _parse_kimi_toolchain_probe_output(result.stdout).get("ANTHROPIC_BASE_URL", "<empty>")
         return DoctorCheck(
             name="kimi_shell_helper",
             status="failed",
@@ -1717,6 +1753,109 @@ def _check_kimi_shell_helper(home: Path | None = None) -> DoctorCheck:
         status="failed",
         detail=f"`kimi` failed inside `bash -lic`: {detail}",
     )
+
+
+def build_local_kimi_toolchain_report(home: Path | None = None) -> LocalToolchainReport:
+    resolved_home = (home or Path.home()).expanduser().resolve()
+    startup_target = {
+        "kind": "local",
+        "shell": "bash",
+        "shell_login": True,
+        "shell_interactive": True,
+    }
+    startup_files = bash_login_startup_file_statuses(resolved_home)
+    startup_summary = summarize_target_bash_login_startup(startup_target, home=resolved_home) or "n/a"
+    shell_bridge = build_bash_login_shell_bridge_recommendation(resolved_home)
+
+    try:
+        result = _run_kimi_toolchain_probe(resolved_home)
+    except OSError as exc:
+        return LocalToolchainReport(
+            status="failed",
+            startup_files=startup_files,
+            bash_login_startup=startup_summary,
+            shell_bridge=shell_bridge,
+            detail=f"Could not launch `bash -lic` to verify `kimi`, `claude`, and `codex`: {exc}",
+        )
+    except _DoctorSubprocessTimeout as exc:
+        return LocalToolchainReport(
+            status="failed",
+            startup_files=startup_files,
+            bash_login_startup=startup_summary,
+            shell_bridge=shell_bridge,
+            detail=(
+                f"`kimi` verification in `bash -lic` did not finish: "
+                f"{_doctor_timeout_detail(exc.command_text, exc.timeout_seconds)}."
+            ),
+        )
+
+    parsed = _parse_kimi_toolchain_probe_output(result.stdout)
+    kimi_check = _kimi_shell_helper_check_from_probe(result)
+    if kimi_check.status != "ok":
+        return LocalToolchainReport(
+            status="failed",
+            startup_files=startup_files,
+            bash_login_startup=startup_summary,
+            shell_bridge=shell_bridge,
+            anthropic_base_url=parsed.get("ANTHROPIC_BASE_URL"),
+            codex_auth=parsed.get("CODEX_AUTH"),
+            codex_version=parsed.get("CODEX_VERSION"),
+            claude_version=parsed.get("CLAUDE_VERSION"),
+            detail=kimi_check.detail,
+        )
+
+    required_fields = {
+        "anthropic_base_url": parsed.get("ANTHROPIC_BASE_URL"),
+        "codex_auth": parsed.get("CODEX_AUTH"),
+        "codex_version": parsed.get("CODEX_VERSION"),
+        "claude_version": parsed.get("CLAUDE_VERSION"),
+    }
+    missing_fields = [field for field, value in required_fields.items() if not value]
+    if missing_fields:
+        missing = ", ".join(missing_fields)
+        return LocalToolchainReport(
+            status="failed",
+            startup_files=startup_files,
+            bash_login_startup=startup_summary,
+            shell_bridge=shell_bridge,
+            anthropic_base_url=parsed.get("ANTHROPIC_BASE_URL"),
+            codex_auth=parsed.get("CODEX_AUTH"),
+            codex_version=parsed.get("CODEX_VERSION"),
+            claude_version=parsed.get("CLAUDE_VERSION"),
+            detail=f"Local toolchain probe succeeded but did not report: {missing}.",
+        )
+
+    return LocalToolchainReport(
+        status="ok",
+        startup_files=startup_files,
+        bash_login_startup=startup_summary,
+        shell_bridge=shell_bridge,
+        anthropic_base_url=required_fields["anthropic_base_url"],
+        codex_auth=required_fields["codex_auth"],
+        codex_version=required_fields["codex_version"],
+        claude_version=required_fields["claude_version"],
+    )
+
+
+def _check_kimi_shell_helper(home: Path | None = None) -> DoctorCheck:
+    try:
+        result = _run_kimi_toolchain_probe(home)
+    except OSError as exc:
+        return DoctorCheck(
+            name="kimi_shell_helper",
+            status="failed",
+            detail=f"Could not launch `bash -lic` to verify `kimi`, `claude`, and `codex`: {exc}",
+        )
+    except _DoctorSubprocessTimeout as exc:
+        return DoctorCheck(
+            name="kimi_shell_helper",
+            status="failed",
+            detail=(
+                f"`kimi` verification in `bash -lic` did not finish: "
+                f"{_doctor_timeout_detail(exc.command_text, exc.timeout_seconds)}."
+            ),
+        )
+    return _kimi_shell_helper_check_from_probe(result)
 
 
 def _check_kimi_bootstrap_helper(home: Path | None = None) -> DoctorCheck:
