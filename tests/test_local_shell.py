@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 
@@ -629,6 +630,31 @@ def test_kimi_shell_init_requires_interactive_bash_warning_accepts_login_shell_s
     assert kimi_shell_init_requires_interactive_bash_warning(target, home=home) is None
 
 
+def test_kimi_shell_init_requires_interactive_bash_warning_accepts_login_shell_startup_with_expand_aliases_kimi(
+    tmp_path: Path,
+):
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".profile").write_text(
+        "\n".join(
+            [
+                "shopt -s expand_aliases",
+                "alias kimi='export ANTHROPIC_API_KEY=test-shell-key ANTHROPIC_BASE_URL=https://api.kimi.com/coding/'",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    target = {
+        "kind": "local",
+        "shell": "bash",
+        "shell_login": True,
+        "shell_init": ["command -v kimi >/dev/null 2>&1", "kimi"],
+    }
+
+    assert kimi_shell_init_requires_interactive_bash_warning(target, home=home) is None
+
+
 def test_kimi_shell_init_requires_interactive_bash_warning_accepts_login_shell_startup_with_kimi_on_path(
     tmp_path: Path,
 ):
@@ -648,6 +674,33 @@ def test_kimi_shell_init_requires_interactive_bash_warning_accepts_login_shell_s
     }
 
     assert kimi_shell_init_requires_interactive_bash_warning(target, home=home) is None
+
+
+def test_kimi_shell_init_requires_interactive_bash_warning_accepts_login_shell_with_kimi_on_launch_path(
+    tmp_path: Path,
+):
+    home = tmp_path / "home"
+    home.mkdir()
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    kimi = bin_dir / "kimi"
+    kimi.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    kimi.chmod(0o755)
+    target = {
+        "kind": "local",
+        "shell": "bash",
+        "shell_login": True,
+        "shell_init": ["command -v kimi >/dev/null 2>&1", "kimi"],
+    }
+
+    assert (
+        kimi_shell_init_requires_interactive_bash_warning(
+            target,
+            home=home,
+            env={"PATH": f"{bin_dir}{os.pathsep}/usr/bin:/bin"},
+        )
+        is None
+    )
 
 
 def test_kimi_shell_init_requires_interactive_bash_warning_ignores_echoed_login_source_text(
