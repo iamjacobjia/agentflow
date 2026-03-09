@@ -112,6 +112,8 @@ def test_python_module_entrypoint_displays_help():
     assert "validate" in completed.stdout
     assert "runs" in completed.stdout
     assert "show" in completed.stdout
+    assert "cancel" in completed.stdout
+    assert "rerun" in completed.stdout
     assert "check-local" in completed.stdout
     assert "smoke" in completed.stdout
 
@@ -2283,6 +2285,105 @@ def test_show_exits_for_missing_run(monkeypatch):
     )
 
     result = runner.invoke(app, ["show", "missing-run"])
+
+    assert result.exit_code == 1
+    assert "Run `missing-run` not found in `.agentflow/runs`." in result.stderr
+
+
+def test_cancel_outputs_summary_for_existing_run(monkeypatch):
+    captured: dict[str, object] = {}
+
+    class FakeOrchestrator:
+        async def cancel(self, run_id: str):
+            captured["run_id"] = run_id
+            return _completed_run("run-cancel", pipeline_name="cancel-pipeline", status="cancelling")
+
+    monkeypatch.setattr(
+        agentflow.cli,
+        "_build_runtime",
+        lambda runs_dir, max_concurrent_runs: (
+            SimpleNamespace(run_dir=lambda run_id: Path(runs_dir) / run_id),
+            FakeOrchestrator(),
+        ),
+    )
+
+    result = runner.invoke(app, ["cancel", "run-cancel"])
+
+    assert result.exit_code == 0
+    assert captured["run_id"] == "run-cancel"
+    assert "Run run-cancel: cancelling" in result.stdout
+    assert "Pipeline: cancel-pipeline" in result.stdout
+
+
+def test_cancel_exits_for_missing_run(monkeypatch):
+    class FakeOrchestrator:
+        async def cancel(self, run_id: str):
+            raise KeyError(run_id)
+
+    monkeypatch.setattr(
+        agentflow.cli,
+        "_build_runtime",
+        lambda runs_dir, max_concurrent_runs: (SimpleNamespace(run_dir=lambda run_id: Path(runs_dir) / run_id), FakeOrchestrator()),
+    )
+
+    result = runner.invoke(app, ["cancel", "missing-run"])
+
+    assert result.exit_code == 1
+    assert "Run `missing-run` not found in `.agentflow/runs`." in result.stderr
+
+
+def test_rerun_supports_json_summary_output(monkeypatch):
+    captured: dict[str, object] = {}
+
+    queued_run = SimpleNamespace(
+        id="run-rerun-new",
+        status=SimpleNamespace(value="queued"),
+        pipeline=SimpleNamespace(name="rerun-pipeline", nodes=[]),
+        started_at=None,
+        finished_at=None,
+        nodes={},
+        model_dump=lambda mode="json": {"id": "run-rerun-new", "status": "queued"},
+    )
+
+    class FakeOrchestrator:
+        async def rerun(self, run_id: str):
+            captured["run_id"] = run_id
+            return queued_run
+
+    monkeypatch.setattr(
+        agentflow.cli,
+        "_build_runtime",
+        lambda runs_dir, max_concurrent_runs: (
+            SimpleNamespace(run_dir=lambda run_id: Path(runs_dir) / run_id),
+            FakeOrchestrator(),
+        ),
+    )
+
+    result = runner.invoke(app, ["rerun", "run-old", "--output", "json-summary"])
+
+    assert result.exit_code == 0
+    assert captured["run_id"] == "run-old"
+    assert json.loads(result.stdout) == {
+        "id": "run-rerun-new",
+        "status": "queued",
+        "pipeline": {"name": "rerun-pipeline"},
+        "run_dir": ".agentflow/runs/run-rerun-new",
+        "nodes": [],
+    }
+
+
+def test_rerun_exits_for_missing_run(monkeypatch):
+    class FakeOrchestrator:
+        async def rerun(self, run_id: str):
+            raise KeyError(run_id)
+
+    monkeypatch.setattr(
+        agentflow.cli,
+        "_build_runtime",
+        lambda runs_dir, max_concurrent_runs: (SimpleNamespace(run_dir=lambda run_id: Path(runs_dir) / run_id), FakeOrchestrator()),
+    )
+
+    result = runner.invoke(app, ["rerun", "missing-run"])
 
     assert result.exit_code == 1
     assert "Run `missing-run` not found in `.agentflow/runs`." in result.stderr

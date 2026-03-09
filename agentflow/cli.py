@@ -1117,6 +1117,46 @@ def show(
 
 
 @app.command()
+def cancel(
+    run_id: str,
+    runs_dir: str = typer.Option(".agentflow/runs", envvar="AGENTFLOW_RUNS_DIR"),
+    max_concurrent_runs: int = typer.Option(2, envvar="AGENTFLOW_MAX_CONCURRENT_RUNS"),
+    output: RunOutputFormat = typer.Option(RunOutputFormat.SUMMARY, "--output", help="Result output format."),
+) -> None:
+    store, orchestrator = _build_runtime(runs_dir, max_concurrent_runs)
+
+    async def _cancel() -> None:
+        try:
+            record = await orchestrator.cancel(run_id)
+        except KeyError as exc:
+            typer.echo(f"Run `{run_id}` not found in `{runs_dir}`.", err=True)
+            raise typer.Exit(code=1) from exc
+        _echo_run_result(record, output=output, run_dir=_run_dir_for_record(store, record.id))
+
+    asyncio.run(_cancel())
+
+
+@app.command()
+def rerun(
+    run_id: str,
+    runs_dir: str = typer.Option(".agentflow/runs", envvar="AGENTFLOW_RUNS_DIR"),
+    max_concurrent_runs: int = typer.Option(2, envvar="AGENTFLOW_MAX_CONCURRENT_RUNS"),
+    output: RunOutputFormat = typer.Option(RunOutputFormat.SUMMARY, "--output", help="Result output format."),
+) -> None:
+    store, orchestrator = _build_runtime(runs_dir, max_concurrent_runs)
+
+    async def _rerun() -> None:
+        try:
+            record = await orchestrator.rerun(run_id)
+        except KeyError as exc:
+            typer.echo(f"Run `{run_id}` not found in `{runs_dir}`.", err=True)
+            raise typer.Exit(code=1) from exc
+        _echo_run_result(record, output=output, run_dir=_run_dir_for_record(store, record.id))
+
+    asyncio.run(_rerun())
+
+
+@app.command()
 def inspect(
     path: str,
     node: list[str] = typer.Option(None, "--node", "-n", help="Inspect only the selected node ids."),
