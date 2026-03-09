@@ -16,7 +16,10 @@ from agentflow.local_shell import (
     shell_init_uses_kimi_helper,
     shell_wrapper_requires_command_placeholder,
     target_uses_bash,
+    target_uses_login_bash,
     target_uses_interactive_bash,
+    target_disables_bash_login_startup,
+    target_disables_bash_rc_startup,
 )
 
 
@@ -350,6 +353,18 @@ class LocalTarget(BaseModel):
                     "`target.bootstrap: kimi` requires interactive bash startup so helpers from `~/.bashrc` are "
                     "available. Set `target.shell_interactive: true`, use `bash -lic`, or drop `target.bootstrap` "
                     "and configure the bootstrap explicitly."
+                )
+            if target_uses_login_bash(self) and target_disables_bash_login_startup(self):
+                raise ValueError(
+                    "`target.bootstrap: kimi` cannot use bash with `--noprofile` because login startup files will "
+                    "not load the `kimi` helper. Remove `--noprofile` or drop `target.bootstrap` and configure the "
+                    "bootstrap explicitly."
+                )
+            if not target_uses_login_bash(self) and target_disables_bash_rc_startup(self):
+                raise ValueError(
+                    "`target.bootstrap: kimi` cannot use bash with `--norc` because interactive startup will not "
+                    "load `~/.bashrc` and the `kimi` helper will usually be unavailable. Remove `--norc` or drop "
+                    "`target.bootstrap` and configure the bootstrap explicitly."
                 )
         return self
 

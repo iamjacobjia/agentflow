@@ -353,6 +353,14 @@ def test_pipeline_validation_opt_out_drops_customized_kimi_shell_defaults():
             {"bootstrap": "kimi", "shell": "bash", "shell_interactive": False},
             r"target\.bootstrap: kimi.*requires interactive bash startup",
         ),
+        (
+            {"bootstrap": "kimi", "shell": "bash --noprofile -lic '{command}'"},
+            r"target\.bootstrap: kimi.*--noprofile",
+        ),
+        (
+            {"bootstrap": "kimi", "shell": "bash --norc -ic '{command}'", "shell_login": False},
+            r"target\.bootstrap: kimi.*--norc",
+        ),
     ],
 )
 def test_pipeline_validation_rejects_incompatible_kimi_bootstrap_overrides(target_patch, expected_message):

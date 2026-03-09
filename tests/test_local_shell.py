@@ -137,6 +137,32 @@ def test_kimi_shell_init_requires_interactive_bash_warning_supports_shell_init_l
     )
 
 
+def test_kimi_shell_init_requires_interactive_bash_warning_rejects_noprofile_login_shell():
+    target = {
+        "kind": "local",
+        "shell": "bash --noprofile -lic '{command}'",
+        "shell_init": "kimi",
+    }
+
+    assert kimi_shell_init_requires_interactive_bash_warning(target) == (
+        "`shell_init: kimi` uses bash with `--noprofile`, so login startup files never reach `~/.bashrc`. "
+        "Remove `--noprofile`, source the helper explicitly, or export provider variables directly."
+    )
+
+
+def test_kimi_shell_init_requires_interactive_bash_warning_rejects_norc_interactive_shell():
+    target = {
+        "kind": "local",
+        "shell": "bash --norc -ic '{command}'",
+        "shell_init": "kimi",
+    }
+
+    assert kimi_shell_init_requires_interactive_bash_warning(target) == (
+        "`shell_init: kimi` uses bash with `--norc`, so interactive startup will not load `~/.bashrc`. "
+        "Remove `--norc`, source the helper explicitly, or export provider variables directly."
+    )
+
+
 def test_kimi_shell_init_requires_interactive_bash_warning_accepts_bash_env_bootstrap(tmp_path: Path):
     shell_env = tmp_path / "shell.env"
     shell_env.write_text("kimi(){ :; }\n", encoding="utf-8")
@@ -283,6 +309,12 @@ def test_summarize_target_bash_login_startup_reports_missing_login_files(tmp_pat
     assert summarize_target_bash_login_startup(target) == "none"
 
 
+def test_summarize_target_bash_login_startup_reports_noprofile_override():
+    target = {"kind": "local", "shell": "bash --noprofile -lc '{command}'"}
+
+    assert summarize_target_bash_login_startup(target) == "disabled (--noprofile)"
+
+
 def test_summarize_target_bash_login_startup_returns_none_for_non_login_shell():
     target = {"kind": "local", "shell": "bash"}
 
@@ -298,6 +330,15 @@ def test_target_bash_login_startup_warning_reports_missing_login_files(tmp_path:
     assert target_bash_login_startup_warning(target) == (
         "Bash login startup will not load any user file from `HOME` because `~/.bash_profile`, "
         "`~/.bash_login`, and `~/.profile` are all missing."
+    )
+
+
+def test_target_bash_login_startup_warning_reports_noprofile_override():
+    target = {"kind": "local", "shell": "bash --noprofile -lc '{command}'"}
+
+    assert target_bash_login_startup_warning(target) == (
+        "Bash login startup is disabled by `--noprofile`, so login shells will not load `~/.bash_profile`, "
+        "`~/.bash_login`, or `~/.profile`."
     )
 
 
@@ -723,6 +764,22 @@ def test_target_bash_startup_exports_env_var_checks_login_shell_startup(
     assert observed["command"] == ["bash", "-lc", 'test -n "${ANTHROPIC_API_KEY:-}"']
     assert observed["env"]["HOME"] == str(home)
     assert observed["timeout"] == 5.0
+
+
+def test_target_bash_startup_exports_env_var_returns_false_when_noprofile_disables_login_startup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".profile").write_text('export ANTHROPIC_API_KEY="startup-key"\n', encoding="utf-8")
+    monkeypatch.setattr("agentflow.local_shell.Path.home", lambda: home)
+    target = {
+        "kind": "local",
+        "shell": "bash --noprofile -lc '{command}'",
+    }
+
+    assert target_bash_startup_exports_env_var(target, "ANTHROPIC_API_KEY", home=home) is False
 
 
 def test_target_bash_startup_exports_env_var_uses_launch_cwd_for_relative_profile_sources(tmp_path: Path):

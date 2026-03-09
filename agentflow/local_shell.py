@@ -64,6 +64,15 @@ class BashStartupEnvProbeResult:
     timeout_seconds: float | None = None
 
 
+@dataclass(frozen=True)
+class _BashShellFlags:
+    uses_bash: bool = False
+    login: bool = False
+    interactive: bool = False
+    noprofile: bool = False
+    norc: bool = False
+
+
 def _target_value(target: Any, key: str) -> Any:
     if isinstance(target, dict):
         return target.get(key)
@@ -1280,28 +1289,53 @@ def target_uses_bash(target: Any) -> bool:
     return any(os.path.basename(part) == "bash" for part in _split_shell_parts(shell))
 
 
-def target_uses_interactive_bash(target: Any) -> bool:
-    if bool(_target_value(target, "shell_interactive")):
-        return True
-
+def _target_bash_shell_flags(target: Any) -> _BashShellFlags:
     shell = _target_value(target, "shell")
     shell_parts = _split_shell_parts(shell if isinstance(shell, str) else None)
     if not shell_parts:
-        return False
+        return _BashShellFlags()
 
     for index, part in enumerate(shell_parts):
         if os.path.basename(part) != "bash":
             continue
 
-        interactive = False
+        flags = _BashShellFlags(uses_bash=True)
         position = index + 1
         while position < len(shell_parts):
             arg = shell_parts[position]
             if arg == "--":
-                return interactive
+                return flags
+            if arg == "--login":
+                flags = _BashShellFlags(
+                    uses_bash=True,
+                    login=True,
+                    interactive=flags.interactive,
+                    noprofile=flags.noprofile,
+                    norc=flags.norc,
+                )
+                position += 1
+                continue
+            if arg == "--noprofile":
+                flags = _BashShellFlags(
+                    uses_bash=True,
+                    login=flags.login,
+                    interactive=flags.interactive,
+                    noprofile=True,
+                    norc=flags.norc,
+                )
+                position += 1
+                continue
+            if arg == "--norc":
+                flags = _BashShellFlags(
+                    uses_bash=True,
+                    login=flags.login,
+                    interactive=flags.interactive,
+                    noprofile=flags.noprofile,
+                    norc=True,
+                )
+                position += 1
+                continue
             if arg.startswith("--"):
-                if arg == "--command":
-                    return interactive
                 if arg in _BASH_LONG_FLAGS_WITH_VALUE:
                     position += 2
                     continue
@@ -1311,59 +1345,44 @@ def target_uses_interactive_bash(target: Any) -> bool:
                 position += 1
                 continue
             if not arg.startswith("-") or arg == "-":
-                return interactive
-            if "i" in arg[1:]:
-                interactive = True
-            if "c" in arg[1:]:
-                return interactive
-            position += 1
-        return interactive
+                return flags
 
-    return False
+            flags = _BashShellFlags(
+                uses_bash=True,
+                login=flags.login or "l" in arg[1:],
+                interactive=flags.interactive or "i" in arg[1:],
+                noprofile=flags.noprofile,
+                norc=flags.norc,
+            )
+            if "c" in arg[1:]:
+                return flags
+            position += 1
+
+        return flags
+
+    return _BashShellFlags()
+
+
+def target_uses_interactive_bash(target: Any) -> bool:
+    if bool(_target_value(target, "shell_interactive")):
+        return True
+
+    return _target_bash_shell_flags(target).interactive
 
 
 def target_uses_login_bash(target: Any) -> bool:
     if bool(_target_value(target, "shell_login")):
         return True
 
-    shell = _target_value(target, "shell")
-    shell_parts = _split_shell_parts(shell if isinstance(shell, str) else None)
-    if not shell_parts:
-        return False
+    return _target_bash_shell_flags(target).login
 
-    for index, part in enumerate(shell_parts):
-        if os.path.basename(part) != "bash":
-            continue
 
-        login = False
-        position = index + 1
-        while position < len(shell_parts):
-            arg = shell_parts[position]
-            if arg == "--":
-                return login
-            if arg == "--login":
-                login = True
-                position += 1
-                continue
-            if arg.startswith("--"):
-                if arg in _BASH_LONG_FLAGS_WITH_VALUE:
-                    position += 2
-                    continue
-                if any(arg.startswith(f"{option}=") for option in _BASH_LONG_FLAGS_WITH_VALUE):
-                    position += 1
-                    continue
-                position += 1
-                continue
-            if not arg.startswith("-") or arg == "-":
-                return login
-            if "l" in arg[1:]:
-                login = True
-            if "c" in arg[1:]:
-                return login
-            position += 1
-        return login
+def target_disables_bash_login_startup(target: Any) -> bool:
+    return _target_bash_shell_flags(target).noprofile
 
-    return False
+
+def target_disables_bash_rc_startup(target: Any) -> bool:
+    return _target_bash_shell_flags(target).norc
 
 
 def target_bash_home(
@@ -1419,6 +1438,10 @@ def probe_target_bash_startup_env_var(
     uses_interactive_bash = target_uses_interactive_bash(target)
     if not (uses_login_bash or uses_interactive_bash):
         return BashStartupEnvProbeResult(exported=False)
+    if uses_login_bash and target_disables_bash_login_startup(target):
+        return BashStartupEnvProbeResult(exported=False)
+    if not uses_login_bash and uses_interactive_bash and target_disables_bash_rc_startup(target):
+        return BashStartupEnvProbeResult(exported=False)
 
     effective_home = target_bash_home(target, home=home, env=env, cwd=cwd)
     launch_env = os.environ.copy()
@@ -1459,6 +1482,8 @@ def target_bash_login_startup_file(
 ) -> str | None:
     if not target_uses_login_bash(target):
         return None
+    if target_disables_bash_login_startup(target):
+        return None
 
     resolved_home = target_bash_home(target, home=home, env=env, cwd=cwd)
     startup_file = _bash_login_startup_file(resolved_home)
@@ -1476,6 +1501,8 @@ def target_bash_login_startup_chain(
     cwd: Path | str | None = None,
 ) -> tuple[str, ...] | None:
     if not target_uses_login_bash(target):
+        return None
+    if target_disables_bash_login_startup(target):
         return None
 
     resolved_home = target_bash_home(target, home=home, env=env, cwd=cwd)
@@ -1498,6 +1525,8 @@ def summarize_target_bash_login_startup(
     env: dict[str, str] | None = None,
     cwd: Path | str | None = None,
 ) -> str | None:
+    if target_uses_login_bash(target) and target_disables_bash_login_startup(target):
+        return "disabled (--noprofile)"
     startup_chain = target_bash_login_startup_chain(target, home=home, env=env, cwd=cwd)
     if startup_chain:
         return " -> ".join(startup_chain)
@@ -1515,6 +1544,11 @@ def target_bash_login_startup_warning(
 ) -> str | None:
     if not target_uses_login_bash(target):
         return None
+    if target_disables_bash_login_startup(target):
+        return (
+            "Bash login startup is disabled by `--noprofile`, so login shells will not load `~/.bash_profile`, "
+            "`~/.bash_login`, or `~/.profile`."
+        )
 
     resolved_home = target_bash_home(target, home=home, env=env, cwd=cwd)
     startup_file = _bash_login_startup_file(resolved_home)
@@ -1627,6 +1661,30 @@ def _kimi_bootstrap_without_interactive_bash_warning(source: str) -> str:
     )
 
 
+def _kimi_bootstrap_disabled_bash_startup_warning(source: str, flag: str) -> str:
+    if flag == "--noprofile":
+        if source == "target.shell_init":
+            return (
+                "`shell_init: kimi` uses bash with `--noprofile`, so login startup files never reach "
+                "`~/.bashrc`. Remove `--noprofile`, source the helper explicitly, or export provider variables "
+                "directly."
+            )
+        return (
+            "`target.shell` uses `kimi` with bash and `--noprofile`, so login startup files never reach "
+            "`~/.bashrc`. Remove `--noprofile`, source the helper explicitly, or export provider variables "
+            "directly."
+        )
+    if source == "target.shell_init":
+        return (
+            "`shell_init: kimi` uses bash with `--norc`, so interactive startup will not load `~/.bashrc`. "
+            "Remove `--norc`, source the helper explicitly, or export provider variables directly."
+        )
+    return (
+        "`target.shell` uses `kimi` with bash and `--norc`, so interactive startup will not load `~/.bashrc`. "
+        "Remove `--norc`, source the helper explicitly, or export provider variables directly."
+    )
+
+
 def _shell_program(target: Any) -> str | None:
     shell = _target_value(target, "shell")
     shell_parts = _split_shell_parts(shell if isinstance(shell, str) else None)
@@ -1668,7 +1726,12 @@ def kimi_shell_init_requires_interactive_bash_warning(
 ) -> str | None:
     if not target_uses_bash(target):
         return None
-    if target_uses_interactive_bash(target):
+
+    uses_login_bash = target_uses_login_bash(target)
+    uses_interactive_bash = target_uses_interactive_bash(target)
+    login_startup_disabled = uses_login_bash and target_disables_bash_login_startup(target)
+    rc_startup_disabled = uses_interactive_bash and not uses_login_bash and target_disables_bash_rc_startup(target)
+    if uses_interactive_bash and not login_startup_disabled and not rc_startup_disabled:
         return None
 
     shell_init = _target_value(target, "shell_init")
@@ -1679,7 +1742,7 @@ def kimi_shell_init_requires_interactive_bash_warning(
         home=home,
         cwd=cwd,
     )
-    login_shell_loads_kimi = target_uses_login_bash(target) and bash_login_shell_loads_command(
+    login_shell_loads_kimi = uses_login_bash and not login_startup_disabled and bash_login_shell_loads_command(
         "kimi",
         home=effective_home,
         cwd=cwd,
@@ -1703,6 +1766,10 @@ def kimi_shell_init_requires_interactive_bash_warning(
                 return _explicit_bashrc_shell_init_warning("target.shell")
             if shell_init_sources_bashrc_before_kimi(shell_init):
                 return _explicit_bashrc_kimi_warning("shell_init")
+        if login_startup_disabled:
+            return _kimi_bootstrap_disabled_bash_startup_warning("target.shell_init", "--noprofile")
+        if rc_startup_disabled:
+            return _kimi_bootstrap_disabled_bash_startup_warning("target.shell_init", "--norc")
         return _kimi_bootstrap_without_interactive_bash_warning("target.shell_init")
 
     if shell_command_uses_kimi_helper(shell if isinstance(shell, str) else None):
@@ -1712,6 +1779,10 @@ def kimi_shell_init_requires_interactive_bash_warning(
             return None
         if guarded_bashrc and shell_command_sources_bashrc_before_kimi(shell):
             return _explicit_bashrc_kimi_warning("target.shell")
+        if login_startup_disabled:
+            return _kimi_bootstrap_disabled_bash_startup_warning("target.shell", "--noprofile")
+        if rc_startup_disabled:
+            return _kimi_bootstrap_disabled_bash_startup_warning("target.shell", "--norc")
         return _kimi_bootstrap_without_interactive_bash_warning("target.shell")
 
     return None
