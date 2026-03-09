@@ -975,8 +975,6 @@ def _load_pipeline_with_optional_smoke_preflight(
         preflight_pipeline = pipeline
         if pipeline is not None:
             base_report = _preflight_base_report(path or selected_path, pipeline)
-            if preflight == SmokePreflightMode.ALWAYS and not _path_matches_bundled_smoke(path or selected_path):
-                base_report = _doctor_report()
             report = _augment_preflight_report(base_report, pipeline)
         else:
             report = _doctor_report()

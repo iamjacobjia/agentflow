@@ -4427,42 +4427,56 @@ def test_smoke_runs_preflight_for_explicit_bundled_pipeline_path(monkeypatch):
     assert captured["wait_timeout"] is None
 
 
-def test_smoke_can_force_preflight_for_custom_pipeline(monkeypatch):
+@pytest.mark.parametrize("command", ["run", "smoke"])
+def test_run_and_smoke_force_preflight_for_custom_pipeline_use_pipeline_specific_checks(monkeypatch, command):
+    fake_pipeline = SimpleNamespace(
+        nodes=[
+            SimpleNamespace(
+                id="codex_plan",
+                agent=SimpleNamespace(value="codex"),
+                provider=None,
+                env={},
+                target=SimpleNamespace(
+                    kind="local",
+                    shell=None,
+                    shell_login=False,
+                    shell_interactive=False,
+                    shell_init=None,
+                    cwd=None,
+                ),
+            )
+        ]
+    )
     captured: dict[str, object] = {}
-    doctor_calls = 0
+    codex_readiness_pipelines: list[object] = []
 
-    class FakeOrchestrator:
-        async def submit(self, pipeline: object):
-            captured["submitted_pipeline"] = pipeline
-            return SimpleNamespace(id="smoke-custom-preflight")
-
-        async def wait(self, run_id: str, timeout: float | None = None):
-            captured["wait_run_id"] = run_id
-            captured["wait_timeout"] = timeout
-            return _completed_run(run_id, pipeline_name="custom-smoke")
-
-    def fake_doctor_report():
-        nonlocal doctor_calls
-        doctor_calls += 1
-        return _doctor_report()
-
-    monkeypatch.setattr(agentflow.cli, "build_local_smoke_doctor_report", fake_doctor_report)
     monkeypatch.setattr(
         agentflow.cli,
-        "_build_runtime",
-        lambda runs_dir, max_concurrent_runs: (SimpleNamespace(run_dir=lambda run_id: Path(runs_dir) / run_id), FakeOrchestrator()),
+        "build_local_smoke_doctor_report",
+        lambda: (_ for _ in ()).throw(AssertionError("bundled smoke doctor should not run for custom forced preflight")),
     )
-    fake_pipeline = object()
+    monkeypatch.setattr(agentflow.cli, "build_pipeline_local_kimi_readiness_checks", lambda pipeline: [])
+    monkeypatch.setattr(agentflow.cli, "build_pipeline_local_claude_readiness_checks", lambda pipeline: [])
+    monkeypatch.setattr(
+        agentflow.cli,
+        "build_pipeline_local_codex_readiness_checks",
+        lambda pipeline: codex_readiness_pipelines.append(pipeline) or [],
+    )
+    monkeypatch.setattr(agentflow.cli, "build_pipeline_local_codex_auth_checks", lambda pipeline: [])
+    monkeypatch.setattr(agentflow.cli, "_pipeline_launch_inspection_nodes", lambda pipeline: [])
     monkeypatch.setattr(agentflow.cli, "_load_pipeline", _capture_pipeline_loader(captured, fake_pipeline))
+    monkeypatch.setattr(
+        agentflow.cli,
+        "_run_pipeline",
+        lambda pipeline, runs_dir, max_concurrent_runs, output: captured.setdefault("submitted_pipeline", pipeline),
+    )
 
-    result = runner.invoke(app, ["smoke", "custom-smoke.yaml", "--preflight", "always"])
+    result = runner.invoke(app, [command, "custom-smoke.yaml", "--preflight", "always"])
 
     assert result.exit_code == 0
-    assert doctor_calls == 1
     assert captured["loaded_path"] == "custom-smoke.yaml"
     assert captured["submitted_pipeline"] is fake_pipeline
-    assert captured["wait_run_id"] == "smoke-custom-preflight"
-    assert captured["wait_timeout"] is None
+    assert codex_readiness_pipelines == [fake_pipeline]
 
 
 def test_smoke_can_disable_bundled_preflight(monkeypatch):
