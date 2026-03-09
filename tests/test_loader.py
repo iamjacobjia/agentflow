@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from agentflow.loader import load_pipeline_from_path
+from agentflow.loader import load_pipeline_from_data, load_pipeline_from_path, load_pipeline_from_text
 
 
 def test_load_pipeline_from_path_expands_home_relative_working_dir(tmp_path, monkeypatch):
@@ -83,3 +83,52 @@ nodes:
     assert pipeline.local_target_defaults is not None
     assert pipeline.local_target_defaults.cwd == str((home / "shared").resolve())
     assert pipeline.nodes[1].target.cwd == str((home / "task").resolve())
+
+
+def test_load_pipeline_from_text_resolves_relative_paths_from_explicit_base_dir(tmp_path):
+    workspace = tmp_path / "workspace"
+    pipeline = load_pipeline_from_text(
+        """name: api-yaml
+working_dir: .
+local_target_defaults:
+  cwd: shared
+nodes:
+  - id: plan
+    agent: codex
+    prompt: hi
+    target:
+      kind: local
+      cwd: task
+""",
+        base_dir=workspace,
+    )
+
+    assert pipeline.working_dir == str(workspace.resolve())
+    assert pipeline.local_target_defaults is not None
+    assert pipeline.local_target_defaults.cwd == str((workspace / "shared").resolve())
+    assert pipeline.nodes[0].target.cwd == str((workspace / "task").resolve())
+
+
+def test_load_pipeline_from_data_resolves_relative_paths_from_explicit_base_dir(tmp_path):
+    workspace = tmp_path / "workspace"
+    pipeline = load_pipeline_from_data(
+        {
+            "name": "api-json",
+            "working_dir": ".",
+            "nodes": [
+                {
+                    "id": "plan",
+                    "agent": "codex",
+                    "prompt": "hi",
+                    "target": {
+                        "kind": "local",
+                        "cwd": "task",
+                    },
+                }
+            ],
+        },
+        base_dir=workspace,
+    )
+
+    assert pipeline.working_dir == str(workspace.resolve())
+    assert pipeline.nodes[0].target.cwd == str((workspace / "task").resolve())

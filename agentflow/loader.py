@@ -12,15 +12,18 @@ from agentflow.specs import PipelineSpec
 def load_pipeline_from_path(path: str | Path) -> PipelineSpec:
     path = Path(path)
     data = path.read_text(encoding="utf-8")
-    parsed = _parse_pipeline_text(data)
-    if isinstance(parsed, dict):
-        parsed = _resolve_file_relative_paths(parsed, path.parent.resolve())
-    return PipelineSpec.model_validate(parsed)
+    return load_pipeline_from_text(data, base_dir=path.parent.resolve())
 
 
-def load_pipeline_from_text(data: str) -> PipelineSpec:
+def load_pipeline_from_text(data: str, *, base_dir: str | Path | None = None) -> PipelineSpec:
     parsed = _parse_pipeline_text(data)
-    return PipelineSpec.model_validate(parsed)
+    return load_pipeline_from_data(parsed, base_dir=base_dir)
+
+
+def load_pipeline_from_data(data: Any, *, base_dir: str | Path | None = None) -> PipelineSpec:
+    if isinstance(data, dict) and base_dir is not None:
+        data = _resolve_file_relative_paths(data, _resolve_base_dir(base_dir))
+    return PipelineSpec.model_validate(data)
 
 
 def _parse_pipeline_text(data: str) -> Any:
@@ -30,6 +33,10 @@ def _parse_pipeline_text(data: str) -> Any:
     except json.JSONDecodeError:
         parsed = yaml.safe_load(data)
     return parsed
+
+
+def _resolve_base_dir(base_dir: str | Path) -> Path:
+    return Path(base_dir).expanduser().resolve()
 
 
 def _resolve_file_relative_paths(parsed: dict[str, Any], base_dir: Path) -> dict[str, Any]:
