@@ -10,7 +10,7 @@ from agentflow.prepared import ExecutionPaths, PreparedExecution
 from agentflow.runners.aws_lambda import AwsLambdaRunner
 from agentflow.runners.container import ContainerRunner
 from agentflow.runners.local import LocalRunner
-from agentflow.specs import LocalTarget, NodeSpec
+from agentflow.specs import LocalTarget, NodeSpec, PipelineSpec
 
 
 def _paths(tmp_path: Path) -> ExecutionPaths:
@@ -154,6 +154,53 @@ async def test_local_runner_shell_init_runs_in_login_interactive_shell(tmp_path:
 
     assert result.exit_code == 0
     assert result.stdout_lines[-1] == "interactive-ok"
+    assert result.stderr_lines == []
+
+
+@pytest.mark.asyncio
+async def test_local_runner_inherited_kimi_bootstrap_defaults_run_in_login_interactive_shell(tmp_path: Path):
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    (fake_home / ".hushlogin").write_text("", encoding="utf-8")
+    (fake_home / ".profile").write_text(
+        'if [ -f "$HOME/.bashrc" ]; then\n  . "$HOME/.bashrc"\nfi\n',
+        encoding="utf-8",
+    )
+    (fake_home / ".bashrc").write_text(
+        "case $- in\n"
+        "  *i*) ;;\n"
+        "  *) return;;\n"
+        "esac\n"
+        "kimi(){ export WRAPPED_VALUE=inherited-kimi-ok; }\n",
+        encoding="utf-8",
+    )
+
+    pipeline = PipelineSpec.model_validate(
+        {
+            "name": "inherited-kimi-bootstrap",
+            "working_dir": str(tmp_path),
+            "local_target_defaults": {"bootstrap": "kimi"},
+            "nodes": [
+                {
+                    "id": "gamma-inherited-bootstrap",
+                    "agent": "claude",
+                    "prompt": "hi",
+                }
+            ],
+        }
+    )
+    node = pipeline.nodes[0]
+    prepared = PreparedExecution(
+        command=["bash", "-lc", 'printf "%s" "$WRAPPED_VALUE"'],
+        env={"HOME": str(fake_home)},
+        cwd=str(tmp_path),
+        trace_kind="claude",
+    )
+
+    result = await LocalRunner().execute(node, prepared, _paths(tmp_path), _noop_output, lambda: False)
+
+    assert result.exit_code == 0
+    assert result.stdout_lines[-1] == "inherited-kimi-ok"
     assert result.stderr_lines == []
 
 
