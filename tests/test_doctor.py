@@ -214,6 +214,116 @@ def test_pipeline_local_codex_checks_use_custom_executable(monkeypatch):
     )
 
 
+def test_pipeline_local_codex_auth_checks_use_provider_api_key_env(monkeypatch):
+    pipeline = SimpleNamespace(
+        nodes=[
+            SimpleNamespace(
+                id="codex_plan",
+                agent=SimpleNamespace(value="codex"),
+                provider=ProviderConfig(
+                    name="openrouter",
+                    base_url="https://openrouter.ai/api/v1",
+                    api_key_env="OPENROUTER_API_KEY",
+                    env={"OPENROUTER_API_KEY": "provider-openrouter-key"},
+                ),
+                env={},
+                executable="custom-codex",
+                target=SimpleNamespace(
+                    kind="local",
+                    shell="bash",
+                    shell_login=True,
+                    shell_interactive=True,
+                    shell_init="kimi",
+                    cwd=None,
+                ),
+            )
+        ],
+        working_path=Path.cwd(),
+    )
+    captured_target_commands: list[str] = []
+    captured_launch_envs: list[dict[str, str]] = []
+
+    def fake_run(*args, **kwargs):
+        env = kwargs.get("env") or {}
+        captured_launch_envs.append(env)
+        captured_target_commands.append(env.get("AGENTFLOW_TARGET_COMMAND", ""))
+        return subprocess.CompletedProcess(args=args[0], returncode=0, stdout="", stderr="")
+
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.setattr("agentflow.doctor.subprocess.run", fake_run)
+
+    assert build_pipeline_local_codex_auth_checks(pipeline) == []
+    assert build_pipeline_local_codex_auth_info_checks(pipeline) == [
+        DoctorCheck(
+            name="codex_auth",
+            status="ok",
+            detail=(
+                "Node `codex_plan` (codex) can authenticate local Codex after the node shell bootstrap via "
+                "`OPENROUTER_API_KEY`."
+            ),
+        )
+    ]
+    assert any(env.get("OPENROUTER_API_KEY") == "provider-openrouter-key" for env in captured_launch_envs)
+    assert any("OPENROUTER_API_KEY" in command and "subprocess.run" not in command for command in captured_target_commands)
+    assert all("OPENAI_API_KEY" not in command for command in captured_target_commands)
+
+
+def test_pipeline_local_codex_auth_check_reports_missing_provider_api_key_env(monkeypatch):
+    pipeline = SimpleNamespace(
+        nodes=[
+            SimpleNamespace(
+                id="codex_plan",
+                agent=SimpleNamespace(value="codex"),
+                provider=ProviderConfig(
+                    name="openrouter",
+                    base_url="https://openrouter.ai/api/v1",
+                    api_key_env="OPENROUTER_API_KEY",
+                ),
+                env={},
+                executable="custom-codex",
+                target=SimpleNamespace(
+                    kind="local",
+                    shell="bash",
+                    shell_login=True,
+                    shell_interactive=True,
+                    shell_init="kimi",
+                    cwd=None,
+                ),
+            )
+        ],
+        working_path=Path.cwd(),
+    )
+    captured_target_commands: list[str] = []
+
+    def fake_run(*args, **kwargs):
+        env = kwargs.get("env") or {}
+        target_command = env.get("AGENTFLOW_TARGET_COMMAND", "")
+        captured_target_commands.append(target_command)
+        if "custom-codex --version" in target_command:
+            return subprocess.CompletedProcess(args=args[0], returncode=0, stdout="", stderr="")
+        if "OPENROUTER_API_KEY" in target_command:
+            return subprocess.CompletedProcess(args=args[0], returncode=1, stdout="", stderr="")
+        raise AssertionError(f"unexpected target command: {target_command}")
+
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.setattr("agentflow.doctor.subprocess.run", fake_run)
+
+    assert build_pipeline_local_codex_auth_checks(pipeline) == [
+        DoctorCheck(
+            name="codex_auth",
+            status="failed",
+            detail=(
+                "Node `codex_plan` (codex) cannot authenticate local Codex after the node shell bootstrap; "
+                "`OPENROUTER_API_KEY` is not set in the current environment, `node.env`, or `provider.env`."
+            ),
+        )
+    ]
+    assert any("OPENROUTER_API_KEY" in command and "subprocess.run" not in command for command in captured_target_commands)
+    assert all("OPENAI_API_KEY" not in command for command in captured_target_commands)
+
+
 def test_prepared_kimi_readiness_execution_prefers_repo_venv_python(monkeypatch, tmp_path: Path):
     repo_root = tmp_path / "repo"
     repo_python = repo_root / ".venv" / "bin" / "python"

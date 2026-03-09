@@ -392,17 +392,33 @@ def _has_nonempty_env_value(env: object, key: str) -> bool:
     return bool(str(env.get(key, "")).strip())
 
 
-def _local_codex_auth_check_detail(node_id: str) -> str:
+def _resolved_local_codex_auth_requirements(node: object) -> tuple[str, bool]:
+    provider = resolve_provider(_object_value(node, "provider"), AgentKind.CODEX)
+    api_key_env = str(_object_value(provider, "api_key_env") or "").strip() or "OPENAI_API_KEY"
+    return api_key_env, api_key_env == "OPENAI_API_KEY"
+
+
+def _local_codex_auth_check_detail(node_id: str, *, api_key_env: str, allow_login_status: bool) -> str:
+    if allow_login_status:
+        return (
+            f"Node `{node_id}` (codex) cannot authenticate local Codex after the node shell bootstrap; "
+            f"`codex login status` fails and `{api_key_env}` is not set in the current environment, `node.env`, or `provider.env`."
+        )
     return (
         f"Node `{node_id}` (codex) cannot authenticate local Codex after the node shell bootstrap; "
-        "`codex login status` fails and `OPENAI_API_KEY` is not set in the current environment, `node.env`, or `provider.env`."
+        f"`{api_key_env}` is not set in the current environment, `node.env`, or `provider.env`."
     )
 
 
-def _local_codex_auth_ok_check_detail(node_id: str) -> str:
+def _local_codex_auth_ok_check_detail(node_id: str, *, api_key_env: str, allow_login_status: bool) -> str:
+    if allow_login_status:
+        return (
+            f"Node `{node_id}` (codex) can authenticate local Codex after the node shell bootstrap via "
+            f"`codex login status` or `{api_key_env}`."
+        )
     return (
         f"Node `{node_id}` (codex) can authenticate local Codex after the node shell bootstrap via "
-        "`codex login status` or `OPENAI_API_KEY`."
+        f"`{api_key_env}`."
     )
 
 
@@ -470,16 +486,24 @@ def _node_pipeline_workdir(node: object, pipeline: object | None = None) -> Path
     return Path(str(working_path)).expanduser().resolve()
 
 
-def _codex_auth_probe_command(executable: str) -> list[str]:
-    probe_script = (
-        "import os\n"
-        "import subprocess\n"
-        "import sys\n"
-        "if os.getenv('OPENAI_API_KEY', '').strip():\n"
-        "    raise SystemExit(0)\n"
-        "raise SystemExit(subprocess.run([sys.argv[1], 'login', 'status']).returncode)\n"
-    )
-    return [sys.executable, "-c", probe_script, executable]
+def _codex_auth_probe_command(executable: str, *, api_key_env: str, allow_login_status: bool) -> list[str]:
+    probe_lines = [
+        "import os",
+        "import sys",
+        "api_key_env = sys.argv[2]",
+        "if api_key_env and os.getenv(api_key_env, '').strip():",
+        "    raise SystemExit(0)",
+    ]
+    if allow_login_status:
+        probe_lines.extend(
+            [
+                "import subprocess",
+                "raise SystemExit(subprocess.run([sys.argv[1], 'login', 'status']).returncode)",
+            ]
+        )
+    else:
+        probe_lines.append("raise SystemExit(1)")
+    return [sys.executable, "-c", "\n".join(probe_lines) + "\n", executable, api_key_env]
 
 
 def _prepared_codex_auth_execution(node: object, pipeline: object | None = None) -> tuple[PreparedExecution, object] | None:
@@ -507,8 +531,13 @@ def _prepared_codex_auth_execution(node: object, pipeline: object | None = None)
         return None
 
     executable = str(_object_value(node, "executable") or "codex")
+    api_key_env, allow_login_status = _resolved_local_codex_auth_requirements(node)
     prepared = PreparedExecution(
-        command=_codex_auth_probe_command(executable),
+        command=_codex_auth_probe_command(
+            executable,
+            api_key_env=api_key_env,
+            allow_login_status=allow_login_status,
+        ),
         env=env,
         cwd=str(paths.host_workdir),
         trace_kind="final",
@@ -986,11 +1015,19 @@ def build_pipeline_local_codex_auth_checks(pipeline: object) -> list[DoctorCheck
             continue
 
         node_id = str(_object_value(node, "id", "codex"))
+        api_key_env, allow_login_status = _resolved_local_codex_auth_requirements(node)
         checks.append(
             DoctorCheck(
                 name="codex_auth",
                 status="failed",
-                detail=failure_detail or _local_codex_auth_check_detail(node_id),
+                detail=(
+                    failure_detail
+                    or _local_codex_auth_check_detail(
+                        node_id,
+                        api_key_env=api_key_env,
+                        allow_login_status=allow_login_status,
+                    )
+                ),
             )
         )
     return checks
@@ -1015,11 +1052,19 @@ def build_pipeline_local_codex_auth_info_checks(pipeline: object) -> list[Doctor
             continue
 
         node_id = str(_object_value(node, "id", "codex"))
+        api_key_env, allow_login_status = _resolved_local_codex_auth_requirements(node)
         checks.append(
             DoctorCheck(
                 name="codex_auth",
                 status="ok",
-                detail=failure_detail or _local_codex_auth_ok_check_detail(node_id),
+                detail=(
+                    failure_detail
+                    or _local_codex_auth_ok_check_detail(
+                        node_id,
+                        api_key_env=api_key_env,
+                        allow_login_status=allow_login_status,
+                    )
+                ),
             )
         )
     return checks
