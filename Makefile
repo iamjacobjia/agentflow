@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help test inspect-local doctor-local smoke-local check-local toolchain-local
+.PHONY: help test inspect-local doctor-local smoke-local check-local toolchain-local check-local-custom
 
 PYTHON := $(if $(wildcard .venv/bin/python),.venv/bin/python,python3)
 
@@ -10,6 +10,7 @@ help:
 	  '  python        Prefer .venv/bin/python when available, else python3' \
 	  '  test          Run the Python test suite' \
 	  '  toolchain-local Verify `bash -lic` + `kimi` still exposes local codex and claude and report bash startup' \
+	  '  check-local-custom Verify a temporary external Codex + Claude-on-Kimi pipeline through `agentflow check-local`' \
 	  '  inspect-local Inspect the bundled local Kimi-backed smoke pipeline' \
 	  '  doctor-local  Check local Codex/Claude/Kimi smoke prerequisites' \
 	  '  smoke-local   Run the bundled local Codex + Claude-on-Kimi smoke test' \
@@ -20,6 +21,9 @@ test:
 
 toolchain-local:
 	bash scripts/verify-local-kimi-shell.sh
+
+check-local-custom:
+	bash scripts/verify-custom-local-kimi-pipeline.sh
 
 inspect-local:
 	$(PYTHON) -m agentflow inspect examples/local-real-agents-kimi-smoke.yaml --output summary
