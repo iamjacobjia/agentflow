@@ -1004,6 +1004,41 @@ nodes:
     ]
 
 
+def test_inspect_command_json_summary_accepts_login_bash_startup_with_undecodable_bytes(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".profile").write_bytes(b'\xff\xfeif [ -f "$HOME/.bashrc" ]; then . "$HOME/.bashrc"; fi\n')
+    (home / ".bashrc").write_text("kimi(){ :; }\n", encoding="utf-8")
+    monkeypatch.setattr("agentflow.local_shell.Path.home", lambda: home)
+
+    pipeline_path = tmp_path / "pipeline.yaml"
+    pipeline_path.write_text(
+        """name: inspect-undecodable-bash-startup
+working_dir: .
+nodes:
+  - id: review
+    agent: claude
+    provider: kimi
+    prompt: hi
+    target:
+      kind: local
+      bootstrap: kimi
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "super-secret")
+
+    result = runner.invoke(app, ["inspect", str(pipeline_path), "--output", "json-summary"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["nodes"][0]["bootstrap"] == (
+        "preset=kimi, shell=bash, login=true, startup=~/.profile -> ~/.bashrc, interactive=true, "
+        "init=command -v kimi >/dev/null 2>&1 && kimi"
+    )
+    assert payload["nodes"][0]["warnings"] == []
+
+
 def test_inspect_command_json_summary_warns_when_login_bash_reaches_missing_bashrc(tmp_path, monkeypatch):
     home = tmp_path / "home"
     home.mkdir()
