@@ -1413,6 +1413,33 @@ def summarize_target_bash_login_startup(
     return None
 
 
+def target_bash_login_startup_warning(
+    target: Any,
+    *,
+    home: Path | None = None,
+    env: dict[str, str] | None = None,
+    cwd: Path | str | None = None,
+) -> str | None:
+    if not target_uses_login_bash(target):
+        return None
+
+    resolved_home = target_bash_home(target, home=home, env=env, cwd=cwd)
+    startup_chain = target_bash_login_startup_chain(target, home=home, env=env, cwd=cwd)
+    if startup_chain is None:
+        return (
+            "Bash login startup will not load any user file from `HOME` because `~/.bash_profile`, "
+            "`~/.bash_login`, and `~/.profile` are all missing."
+        )
+
+    if startup_chain[-1] != "~/.bashrc":
+        return f"Bash login startup uses `{startup_chain[0]}`, but it does not reach `~/.bashrc`."
+
+    if not (resolved_home / ".bashrc").exists():
+        return "Bash login startup reaches `~/.bashrc`, but that file does not exist."
+
+    return None
+
+
 def shell_command_uses_kimi_helper(command: str | None) -> bool:
     if not isinstance(command, str) or not command.strip():
         return False

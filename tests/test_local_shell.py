@@ -14,6 +14,7 @@ from agentflow.local_shell import (
     shell_template_exports_env_var_before_command,
     shell_wrapper_requires_command_placeholder,
     summarize_target_bash_login_startup,
+    target_bash_login_startup_warning,
     target_bash_login_startup_chain,
     target_bash_login_startup_file,
     target_bash_startup_exports_env_var,
@@ -285,6 +286,62 @@ def test_summarize_target_bash_login_startup_returns_none_for_non_login_shell():
     target = {"kind": "local", "shell": "bash"}
 
     assert summarize_target_bash_login_startup(target) is None
+
+
+def test_target_bash_login_startup_warning_reports_missing_login_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setattr("agentflow.local_shell.Path.home", lambda: home)
+    target = {"kind": "local", "shell": "bash", "shell_login": True}
+
+    assert target_bash_login_startup_warning(target) == (
+        "Bash login startup will not load any user file from `HOME` because `~/.bash_profile`, "
+        "`~/.bash_login`, and `~/.profile` are all missing."
+    )
+
+
+def test_target_bash_login_startup_warning_reports_missing_bashrc_bridge(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".bash_profile").write_text('export PATH="$HOME/bin:$PATH"\n', encoding="utf-8")
+    monkeypatch.setattr("agentflow.local_shell.Path.home", lambda: home)
+    target = {"kind": "local", "shell": "bash", "shell_login": True}
+
+    assert target_bash_login_startup_warning(target) == (
+        "Bash login startup uses `~/.bash_profile`, but it does not reach `~/.bashrc`."
+    )
+
+
+def test_target_bash_login_startup_warning_reports_missing_bashrc_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".profile").write_text('if [ -f "$HOME/.bashrc" ]; then . "$HOME/.bashrc"; fi\n', encoding="utf-8")
+    monkeypatch.setattr("agentflow.local_shell.Path.home", lambda: home)
+    target = {"kind": "local", "shell": "bash", "shell_login": True}
+
+    assert target_bash_login_startup_warning(target) == (
+        "Bash login startup reaches `~/.bashrc`, but that file does not exist."
+    )
+
+
+def test_target_bash_login_startup_warning_is_none_when_bashrc_bridge_exists(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".profile").write_text('if [ -f "$HOME/.bashrc" ]; then . "$HOME/.bashrc"; fi\n', encoding="utf-8")
+    (home / ".bashrc").write_text("kimi(){ :; }\n", encoding="utf-8")
+    monkeypatch.setattr("agentflow.local_shell.Path.home", lambda: home)
+    target = {"kind": "local", "shell": "bash", "shell_login": True}
+
+    assert target_bash_login_startup_warning(target) is None
 
 
 def test_kimi_shell_init_requires_interactive_bash_warning_detects_eval_style_shell_wrapper():
