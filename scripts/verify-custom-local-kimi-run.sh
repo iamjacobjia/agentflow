@@ -45,7 +45,7 @@ printf "custom run pipeline path: %s\n" "$pipeline_path"
 
 (
   cd "$repo_root"
-  "$python_bin" -m agentflow run "$pipeline_path" --output json-summary --show-preflight >"$stdout_path" 2>"$stderr_path"
+  agentflow_run_with_timeout "$python_bin" "$python_bin" -m agentflow run "$pipeline_path" --output json-summary --show-preflight >"$stdout_path" 2>"$stderr_path"
 )
 
 STDOUT_PATH="$stdout_path" STDERR_PATH="$stderr_path" EXPECTED_TRIGGER="$CUSTOM_LOCAL_KIMI_EXPECTED_TRIGGER" EXPECTED_PIPELINE_NAME="$pipeline_name" "$python_bin" - <<'PY'

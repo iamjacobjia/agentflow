@@ -13,6 +13,14 @@ def _write_executable(path: Path, body: str) -> None:
     path.chmod(0o755)
 
 
+def _write_fake_agentflow_module(root: Path, body: str) -> Path:
+    package_dir = root / "agentflow"
+    package_dir.mkdir(parents=True)
+    (package_dir / "__init__.py").write_text("", encoding="utf-8")
+    (package_dir / "__main__.py").write_text(textwrap.dedent(body), encoding="utf-8")
+    return root
+
+
 def _copy_script(source: Path, destination: Path) -> Path:
     destination.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
     destination.chmod(0o755)
@@ -145,6 +153,60 @@ def test_verify_local_kimi_shell_script_times_out_when_kimi_hangs(tmp_path: Path
     assert elapsed < 3
 
 
+def test_verify_custom_local_kimi_run_script_times_out_when_agentflow_hangs(tmp_path: Path) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    scripts_dir = tmp_path / "scripts"
+    scripts_dir.mkdir()
+
+    run_path = _copy_script(
+        repo_root / "scripts" / "verify-custom-local-kimi-run.sh",
+        scripts_dir / "verify-custom-local-kimi-run.sh",
+    )
+    _copy_script(
+        repo_root / "scripts" / "custom-local-kimi-helpers.sh",
+        scripts_dir / "custom-local-kimi-helpers.sh",
+    )
+    fake_pythonpath = _write_fake_agentflow_module(
+        tmp_path / "fake-pythonpath",
+        """
+        from __future__ import annotations
+
+        import sys
+        import time
+
+        if len(sys.argv) > 1 and sys.argv[1] == "run":
+            print("run-stdout", flush=True)
+            print("run-stderr", file=sys.stderr, flush=True)
+            time.sleep(5)
+        """,
+    )
+
+    started_at = time.monotonic()
+    completed = subprocess.run(
+        ["bash", str(run_path)],
+        capture_output=True,
+        cwd=tmp_path,
+        env={
+            **os.environ,
+            "AGENTFLOW_PYTHON": sys.executable,
+            "PYTHONPATH": str(fake_pythonpath),
+            "AGENTFLOW_LOCAL_VERIFY_TIMEOUT_SECONDS": "0.2",
+        },
+        text=True,
+        timeout=5,
+    )
+    elapsed = time.monotonic() - started_at
+
+    assert completed.returncode == 124
+    assert "custom run pipeline path:" in completed.stdout
+    assert "Timed out after 0.2s:" in completed.stderr
+    assert "agentflow run stderr:" in completed.stderr
+    assert "run-stderr" in completed.stderr
+    assert "agentflow run stdout:" in completed.stderr
+    assert "run-stdout" in completed.stderr
+    assert elapsed < 3
+
+
 def test_verify_local_kimi_stack_script_runs_steps_in_expected_order(tmp_path: Path) -> None:
     repo_root = Path(__file__).resolve().parents[1]
     scripts_dir = tmp_path / "scripts"
@@ -154,12 +216,22 @@ def test_verify_local_kimi_stack_script_runs_steps_in_expected_order(tmp_path: P
         repo_root / "scripts" / "verify-local-kimi-stack.sh",
         scripts_dir / "verify-local-kimi-stack.sh",
     )
+    _copy_script(
+        repo_root / "scripts" / "custom-local-kimi-helpers.sh",
+        scripts_dir / "custom-local-kimi-helpers.sh",
+    )
     log_path = tmp_path / "calls.log"
-    fake_python = tmp_path / "fake-python"
+    fake_pythonpath = _write_fake_agentflow_module(
+        tmp_path / "fake-pythonpath",
+        """
+        from __future__ import annotations
 
-    _write_executable(
-        fake_python,
-        'printf "python:%s\\n" "$*" >>"$AGENTFLOW_TEST_LOG"\n',
+        import os
+        import sys
+
+        with open(os.environ["AGENTFLOW_TEST_LOG"], "a", encoding="utf-8") as handle:
+            handle.write(f"agentflow:{' '.join(sys.argv[1:])}\\n")
+        """,
     )
 
     for script_name in (
@@ -181,8 +253,9 @@ def test_verify_local_kimi_stack_script_runs_steps_in_expected_order(tmp_path: P
         cwd=tmp_path,
         env={
             **os.environ,
-            "AGENTFLOW_PYTHON": str(fake_python),
+            "AGENTFLOW_PYTHON": sys.executable,
             "AGENTFLOW_TEST_LOG": str(log_path),
+            "PYTHONPATH": str(fake_pythonpath),
         },
         text=True,
         timeout=5,
@@ -198,7 +271,7 @@ def test_verify_local_kimi_stack_script_runs_steps_in_expected_order(tmp_path: P
         "verify-custom-local-kimi-inspect.sh mode=",
         "verify-custom-local-kimi-inspect.sh mode=shell-init",
         "verify-custom-local-kimi-inspect.sh mode=shell-wrapper",
-        "python:-m agentflow check-local --output summary",
+        "agentflow:check-local --output summary",
         "verify-custom-local-kimi-pipeline.sh mode=",
         "verify-custom-local-kimi-shell-init.sh mode=",
         "verify-custom-local-kimi-pipeline.sh mode=shell-wrapper",

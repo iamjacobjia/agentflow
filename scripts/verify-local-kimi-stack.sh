@@ -3,15 +3,8 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
-python_bin="${AGENTFLOW_PYTHON:-}"
-
-if [ -z "$python_bin" ]; then
-  if [ -x "$repo_root/.venv/bin/python" ]; then
-    python_bin="$repo_root/.venv/bin/python"
-  else
-    python_bin="python3"
-  fi
-fi
+. "$script_dir/custom-local-kimi-helpers.sh"
+python_bin="$(agentflow_repo_python "$repo_root")"
 
 run_step() {
   local label="$1"
@@ -28,7 +21,7 @@ run_step "External custom doctor (target.shell)" env AGENTFLOW_KIMI_PIPELINE_MOD
 run_step "External custom inspect" bash "$script_dir/verify-custom-local-kimi-inspect.sh"
 run_step "External custom inspect (shell_init)" env AGENTFLOW_KIMI_PIPELINE_MODE=shell-init bash "$script_dir/verify-custom-local-kimi-inspect.sh"
 run_step "External custom inspect (target.shell)" env AGENTFLOW_KIMI_PIPELINE_MODE=shell-wrapper bash "$script_dir/verify-custom-local-kimi-inspect.sh"
-run_step "Bundled check-local" "$python_bin" -m agentflow check-local --output summary
+run_step "Bundled check-local" agentflow_run_with_timeout "$python_bin" "$python_bin" -m agentflow check-local --output summary
 run_step "External custom check-local" bash "$script_dir/verify-custom-local-kimi-pipeline.sh"
 run_step "External custom check-local (shell_init)" bash "$script_dir/verify-custom-local-kimi-shell-init.sh"
 run_step "External custom check-local (target.shell)" env AGENTFLOW_KIMI_PIPELINE_MODE=shell-wrapper bash "$script_dir/verify-custom-local-kimi-pipeline.sh"

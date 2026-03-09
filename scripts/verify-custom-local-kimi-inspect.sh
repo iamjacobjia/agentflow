@@ -39,7 +39,7 @@ printf "custom inspect pipeline path: %s\n" "$inspect_path"
 
 (
   cd "$repo_root"
-  "$python_bin" -m agentflow inspect "$inspect_path" --output summary >"$stdout_path"
+  agentflow_run_with_timeout "$python_bin" "$python_bin" -m agentflow inspect "$inspect_path" --output summary >"$stdout_path"
 )
 
 PIPELINE_DIR="$tmpdir" STDOUT_PATH="$stdout_path" EXPECTED_TRIGGER="$CUSTOM_LOCAL_KIMI_EXPECTED_TRIGGER" EXPECTED_PIPELINE_NAME="$pipeline_name" EXPECTED_LAUNCH="$(

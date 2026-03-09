@@ -29,7 +29,7 @@ agentflow_local_verify_timeout_seconds() {
     timeout_name="AGENTFLOW_DOCTOR_TIMEOUT_SECONDS"
     raw_timeout="$AGENTFLOW_DOCTOR_TIMEOUT_SECONDS"
   else
-    raw_timeout="15"
+    raw_timeout="60"
   fi
 
   "$python_bin" - "$raw_timeout" "$timeout_name" <<'PY'

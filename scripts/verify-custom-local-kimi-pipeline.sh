@@ -46,7 +46,7 @@ printf "custom pipeline path: %s\n" "$pipeline_path"
 
 (
   cd "$repo_root"
-  "$python_bin" -m agentflow check-local "$pipeline_path" --output json-summary >"$stdout_path" 2>"$stderr_path"
+  agentflow_run_with_timeout "$python_bin" "$python_bin" -m agentflow check-local "$pipeline_path" --output json-summary >"$stdout_path" 2>"$stderr_path"
 )
 
 STDOUT_PATH="$stdout_path" STDERR_PATH="$stderr_path" PIPELINE_NAME="$pipeline_name" EXPECTED_TRIGGER="$expected_trigger" "$python_bin" - <<'PY'

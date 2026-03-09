@@ -39,7 +39,7 @@ printf "custom doctor pipeline path: %s\n" "$pipeline_path"
 
 (
   cd "$repo_root"
-  "$python_bin" -m agentflow doctor "$pipeline_path" --output summary >"$stdout_path"
+  agentflow_run_with_timeout "$python_bin" "$python_bin" -m agentflow doctor "$pipeline_path" --output summary >"$stdout_path"
 )
 
 STDOUT_PATH="$stdout_path" EXPECTED_TRIGGER="$CUSTOM_LOCAL_KIMI_EXPECTED_TRIGGER" "$python_bin" - <<'PY'
