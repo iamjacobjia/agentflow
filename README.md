@@ -130,7 +130,7 @@ When you want the full maintainer smoke sequence in one command, run:
 make verify-local
 ```
 
-That wrapper runs the local bash/Kimi toolchain check, the bundled `agentflow check-local` flow, and the external custom-pipeline check in sequence. It now also prints whether `~/.bash_profile`, `~/.bash_login`, or `~/.profile` is supplying the bash login startup path before it verifies `kimi`, `codex`, and `claude`.
+That wrapper runs the local bash/Kimi toolchain check, the bundled `agentflow check-local` flow, the external custom-pipeline `check-local` path, and the external custom-pipeline `run` path in sequence. It now also prints whether `~/.bash_profile`, `~/.bash_login`, or `~/.profile` is supplying the bash login startup path before it verifies `kimi`, `codex`, and `claude`.
 
 By default, `agentflow smoke` now prints a compact per-node summary instead of the full run record JSON. Use `agentflow smoke --output json-summary` when you want a compact machine-readable payload for scripts, or `agentflow smoke --output json` when you want the complete persisted run record with stdout, stderr, and trace details.
 Add `--show-preflight` when you want `smoke` to print the successful local readiness summary before the run starts. AgentFlow writes that extra summary to stderr so JSON stdout stays safe for wrappers and scripts, and it now includes the auto-preflight reason plus matched node bootstrap sources when available.
