@@ -204,6 +204,33 @@ async def test_local_runner_shell_init_adds_interactive_flag_after_env_wrapper_o
 
 
 @pytest.mark.asyncio
+async def test_local_runner_env_wrapper_preserves_launch_env_when_clearing_environment(tmp_path: Path):
+    node = NodeSpec.model_validate(
+        {
+            "id": "gamma-env-wrapper-launch-env",
+            "agent": "codex",
+            "prompt": "hi",
+            "target": {
+                "kind": "local",
+                "shell": f"env -i PATH={os.environ.get('PATH', '/usr/bin:/bin')} bash",
+            },
+        }
+    )
+    prepared = PreparedExecution(
+        command=["python3", "-c", 'import os; print(os.getenv("OPENAI_API_KEY", "missing"))'],
+        env={"OPENAI_API_KEY": "node-secret"},
+        cwd=str(tmp_path),
+        trace_kind="codex",
+    )
+
+    result = await LocalRunner().execute(node, prepared, _paths(tmp_path), _noop_output, lambda: False)
+
+    assert result.exit_code == 0
+    assert result.stdout_lines == ["node-secret"]
+    assert result.stderr_lines == []
+
+
+@pytest.mark.asyncio
 async def test_local_runner_inherited_kimi_bootstrap_defaults_run_in_login_interactive_shell(tmp_path: Path):
     fake_home = tmp_path / "home"
     fake_home.mkdir()
