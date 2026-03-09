@@ -4,6 +4,7 @@ import os
 import re
 import shlex
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -47,6 +48,7 @@ _BASHRC_NONINTERACTIVE_GUARDS = (
 )
 _EXPORT_STYLE_COMMANDS = {"declare", "typeset"}
 _BASH_LOGIN_FILENAMES = (".bash_profile", ".bash_login", ".profile")
+_DEFAULT_BASH_STARTUP_PROBE_TIMEOUT_SECONDS = 5.0
 
 
 class _ShellStartupReadError(RuntimeError):
@@ -54,6 +56,12 @@ class _ShellStartupReadError(RuntimeError):
         super().__init__(detail)
         self.path = path
         self.detail = detail
+
+
+@dataclass(frozen=True)
+class _BashStartupProbeResult:
+    exported: bool
+    timeout_seconds: float | None = None
 
 
 def _target_value(target: Any, key: str) -> Any:
@@ -563,6 +571,19 @@ def _shell_startup_read_error(home: Path, path: Path, exc: OSError) -> _ShellSta
         display_path = str(path)
     detail = (exc.strerror or str(exc)).strip()
     return _ShellStartupReadError(display_path, detail)
+
+
+def _bash_startup_probe_timeout_seconds() -> float:
+    raw_value = os.getenv("AGENTFLOW_BASH_STARTUP_PROBE_TIMEOUT_SECONDS")
+    if raw_value is None:
+        return _DEFAULT_BASH_STARTUP_PROBE_TIMEOUT_SECONDS
+    try:
+        parsed = float(raw_value)
+    except ValueError:
+        return _DEFAULT_BASH_STARTUP_PROBE_TIMEOUT_SECONDS
+    if parsed <= 0:
+        return _DEFAULT_BASH_STARTUP_PROBE_TIMEOUT_SECONDS
+    return parsed
 
 
 def _read_shell_file_text(path: Path) -> str | None:
@@ -1374,17 +1395,34 @@ def target_bash_startup_exports_env_var(
     env: dict[str, str] | None = None,
     cwd: Path | str | None = None,
 ) -> bool:
+    return _probe_target_bash_startup_env_var(
+        target,
+        env_var,
+        home=home,
+        env=env,
+        cwd=cwd,
+    ).exported
+
+
+def _probe_target_bash_startup_env_var(
+    target: Any,
+    env_var: str,
+    *,
+    home: Path | None = None,
+    env: dict[str, str] | None = None,
+    cwd: Path | str | None = None,
+) -> _BashStartupProbeResult:
     if not env_var or not target_uses_bash(target):
-        return False
+        return _BashStartupProbeResult(exported=False)
 
     uses_login_bash = target_uses_login_bash(target)
     uses_interactive_bash = target_uses_interactive_bash(target)
     if not (uses_login_bash or uses_interactive_bash):
-        return False
+        return _BashStartupProbeResult(exported=False)
 
     effective_home = target_bash_home(target, home=home, env=env, cwd=cwd)
-    env = os.environ.copy()
-    env["HOME"] = str(effective_home)
+    launch_env = os.environ.copy()
+    launch_env["HOME"] = str(effective_home)
 
     bash_flag = "-"
     if uses_login_bash:
@@ -1399,13 +1437,16 @@ def target_bash_startup_exports_env_var(
             check=False,
             capture_output=True,
             cwd=str(_resolved_shell_cwd(cwd)),
-            env=env,
+            env=launch_env,
             text=True,
+            timeout=_bash_startup_probe_timeout_seconds(),
         )
     except OSError:
-        return False
+        return _BashStartupProbeResult(exported=False)
+    except subprocess.TimeoutExpired as exc:
+        return _BashStartupProbeResult(exported=False, timeout_seconds=float(exc.timeout))
 
-    return result.returncode == 0
+    return _BashStartupProbeResult(exported=result.returncode == 0)
 
 
 def target_bash_login_startup_file(

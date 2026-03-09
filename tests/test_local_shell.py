@@ -707,6 +707,7 @@ def test_target_bash_startup_exports_env_var_checks_login_shell_startup(
     def fake_run(command, **kwargs):
         observed["command"] = list(command)
         observed["env"] = kwargs.get("env")
+        observed["timeout"] = kwargs.get("timeout")
         return subprocess.CompletedProcess(args=command, returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr("agentflow.local_shell.subprocess.run", fake_run)
@@ -720,6 +721,7 @@ def test_target_bash_startup_exports_env_var_checks_login_shell_startup(
     assert target_bash_startup_exports_env_var(target, "ANTHROPIC_API_KEY", home=home) is True
     assert observed["command"] == ["bash", "-lc", 'test -n "${ANTHROPIC_API_KEY:-}"']
     assert observed["env"]["HOME"] == str(home)
+    assert observed["timeout"] == 5.0
 
 
 def test_target_bash_startup_exports_env_var_uses_launch_cwd_for_relative_profile_sources(tmp_path: Path):
@@ -742,6 +744,57 @@ def test_target_bash_startup_exports_env_var_uses_launch_cwd_for_relative_profil
         )
         is True
     )
+
+
+def test_target_bash_startup_exports_env_var_returns_false_when_probe_times_out(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    home = tmp_path / "home"
+    home.mkdir()
+    observed: dict[str, object] = {}
+
+    def fake_run(command, **kwargs):
+        observed["command"] = list(command)
+        observed["timeout"] = kwargs.get("timeout")
+        raise subprocess.TimeoutExpired(cmd=command, timeout=kwargs["timeout"])
+
+    monkeypatch.setattr("agentflow.local_shell.subprocess.run", fake_run)
+
+    target = {
+        "kind": "local",
+        "shell": "bash",
+        "shell_login": True,
+    }
+
+    assert target_bash_startup_exports_env_var(target, "ANTHROPIC_API_KEY", home=home) is False
+    assert observed["command"] == ["bash", "-lc", 'test -n "${ANTHROPIC_API_KEY:-}"']
+    assert observed["timeout"] == 5.0
+
+
+def test_target_bash_startup_exports_env_var_uses_configured_probe_timeout(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    home = tmp_path / "home"
+    home.mkdir()
+    observed: dict[str, object] = {}
+
+    def fake_run(command, **kwargs):
+        observed["timeout"] = kwargs.get("timeout")
+        return subprocess.CompletedProcess(args=command, returncode=1, stdout="", stderr="")
+
+    monkeypatch.setattr("agentflow.local_shell.subprocess.run", fake_run)
+    monkeypatch.setenv("AGENTFLOW_BASH_STARTUP_PROBE_TIMEOUT_SECONDS", "1.25")
+
+    target = {
+        "kind": "local",
+        "shell": "bash",
+        "shell_login": True,
+    }
+
+    assert target_bash_startup_exports_env_var(target, "ANTHROPIC_API_KEY", home=home) is False
+    assert observed["timeout"] == 1.25
 
 
 def test_shell_template_exports_env_var_before_command_detects_prefix_env_wrapper():
