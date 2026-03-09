@@ -1424,6 +1424,30 @@ nodes:
     assert payload["nodes"][0]["auth"] == "`OPENAI_API_KEY` via `target.shell`"
 
 
+def test_inspect_command_summary_does_not_treat_empty_shell_prefix_openai_key_as_auth_source(tmp_path, monkeypatch):
+    pipeline_path = tmp_path / "pipeline.yaml"
+    pipeline_path.write_text(
+        """name: inspect-codex-shell-prefix-empty-openai-key
+working_dir: .
+nodes:
+  - id: plan
+    agent: codex
+    prompt: hi
+    target:
+      kind: local
+      shell: env OPENAI_API_KEY= bash -c
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    result = runner.invoke(app, ["inspect", str(pipeline_path), "--output", "json-summary"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["nodes"][0]["auth"] == "Codex CLI login or `OPENAI_API_KEY` via current environment"
+
+
 def test_inspect_command_summary_treats_shell_prefix_provider_key_as_auth_source(tmp_path, monkeypatch):
     pipeline_path = tmp_path / "pipeline.yaml"
     pipeline_path.write_text(

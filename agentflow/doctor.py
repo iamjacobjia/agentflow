@@ -462,6 +462,18 @@ def _node_pipeline_workdir(node: object, pipeline: object | None = None) -> Path
     return Path(str(working_path)).expanduser().resolve()
 
 
+def _codex_auth_probe_command(executable: str) -> list[str]:
+    probe_script = (
+        "import os\n"
+        "import subprocess\n"
+        "import sys\n"
+        "if os.getenv('OPENAI_API_KEY', '').strip():\n"
+        "    raise SystemExit(0)\n"
+        "raise SystemExit(subprocess.run([sys.argv[1], 'login', 'status']).returncode)\n"
+    )
+    return [sys.executable, "-c", probe_script, executable]
+
+
 def _prepared_codex_auth_execution(node: object, pipeline: object | None = None) -> tuple[PreparedExecution, object] | None:
     agent = _status_value(_object_value(node, "agent")).lower()
     if agent != AgentKind.CODEX.value:
@@ -488,7 +500,7 @@ def _prepared_codex_auth_execution(node: object, pipeline: object | None = None)
 
     executable = str(_object_value(node, "executable") or "codex")
     prepared = PreparedExecution(
-        command=[executable, "login", "status"],
+        command=_codex_auth_probe_command(executable),
         env=env,
         cwd=str(paths.host_workdir),
         trace_kind="final",
@@ -636,8 +648,6 @@ def _can_authenticate_local_codex(node: object, pipeline: object | None = None) 
         return True, None
 
     prepared, paths = prepared_with_paths
-    if _has_nonempty_env_value(prepared.env, "OPENAI_API_KEY") or bool(str(os.getenv("OPENAI_API_KEY", "")).strip()):
-        return True, None
 
     try:
         launch_plan = LocalRunner().plan_execution(

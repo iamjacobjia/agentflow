@@ -190,7 +190,10 @@ def test_pipeline_local_codex_checks_use_custom_executable(monkeypatch):
         )
     ]
     assert "custom-codex --version" in captured_target_commands
-    assert "custom-codex login status" in captured_target_commands
+    assert any(
+        "custom-codex" in command and "OPENAI_API_KEY" in command and "subprocess.run" in command
+        for command in captured_target_commands
+    )
 
 
 def test_prepared_kimi_readiness_execution_prefers_repo_venv_python(monkeypatch, tmp_path: Path):
@@ -469,7 +472,7 @@ def test_pipeline_local_codex_auth_check_reports_timeout(monkeypatch):
         target_command = (kwargs.get("env") or {}).get("AGENTFLOW_TARGET_COMMAND", "")
         if "custom-codex --version" in target_command:
             return subprocess.CompletedProcess(args=command, returncode=0, stdout="", stderr="")
-        if "custom-codex login status" in target_command:
+        if "custom-codex" in target_command and "OPENAI_API_KEY" in target_command and "subprocess.run" in target_command:
             raise subprocess.TimeoutExpired(cmd=command, timeout=15)
         raise AssertionError(f"unexpected target command: {target_command}")
 
@@ -488,7 +491,61 @@ def test_pipeline_local_codex_auth_check_reports_timeout(monkeypatch):
                     "in the prepared local shell."
                 ),
             }
-        ]
+    ]
+    assert len(commands) == 2
+
+
+def test_pipeline_local_codex_auth_check_does_not_trust_ambient_key_when_shell_clears_it(monkeypatch):
+    pipeline = SimpleNamespace(
+        nodes=[
+            SimpleNamespace(
+                id="codex_plan",
+                agent=SimpleNamespace(value="codex"),
+                provider=None,
+                env={},
+                executable="custom-codex",
+                target=SimpleNamespace(
+                    kind="local",
+                    shell="env OPENAI_API_KEY= bash -c",
+                    shell_login=False,
+                    shell_interactive=False,
+                    shell_init=None,
+                    cwd=None,
+                ),
+            )
+        ],
+        working_path=Path.cwd(),
+    )
+    commands: list[str] = []
+
+    def fake_run(*args, **kwargs):
+        command = list(args[0])
+        target_command = (kwargs.get("env") or {}).get("AGENTFLOW_TARGET_COMMAND", "")
+        if not target_command and command:
+            target_command = command[-1]
+        commands.append(target_command)
+        if "custom-codex --version" in target_command:
+            return subprocess.CompletedProcess(args=args[0], returncode=0, stdout="", stderr="")
+        if "custom-codex" in target_command and "OPENAI_API_KEY" in target_command and "subprocess.run" in target_command:
+            return subprocess.CompletedProcess(args=args[0], returncode=1, stdout="", stderr="")
+        raise AssertionError(f"unexpected target command: {target_command}")
+
+    monkeypatch.setenv("OPENAI_API_KEY", "ambient-openai-key")
+    monkeypatch.setattr("agentflow.doctor.subprocess.run", fake_run)
+
+    checks = build_pipeline_local_codex_auth_checks(pipeline)
+
+    assert [check.as_dict() for check in checks] == [
+        {
+            "name": "codex_auth",
+            "status": "failed",
+            "detail": (
+                "Node `codex_plan` (codex) cannot authenticate local Codex after the node shell bootstrap; "
+                "`codex login status` fails and `OPENAI_API_KEY` is not set in the current environment, `node.env`, "
+                "or `provider.env`."
+            ),
+        }
+    ]
     assert len(commands) == 2
 
 

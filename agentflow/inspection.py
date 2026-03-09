@@ -9,12 +9,15 @@ from agentflow.local_shell import (
     kimi_shell_init_requires_bash_warning,
     kimi_shell_init_requires_interactive_bash_warning,
     render_shell_init,
+    shell_command_prefix_env_value,
     shell_command_prefixes_env_var,
     shell_command_uses_kimi_helper,
+    shell_init_exported_env_var_value,
     shell_init_exports_env_var,
     shell_init_uses_kimi_helper,
     summarize_target_bash_login_startup,
     target_uses_bash,
+    shell_template_exported_env_var_value_before_command,
     shell_template_exports_env_var_before_command,
     target_bash_home,
     target_bash_login_startup_file,
@@ -183,6 +186,10 @@ def _has_nonempty_env_value(env: object, key: str) -> bool:
     return isinstance(env, dict) and bool(str(env.get(key, "")).strip())
 
 
+def _has_nonempty_shell_value(value: str | None) -> bool:
+    return bool(isinstance(value, str) and value.strip())
+
+
 def _env_declares_key(env: object, key: str) -> bool:
     return isinstance(env, dict) and key in env
 
@@ -287,19 +294,27 @@ def _auth_summary(
     if getattr(target, "kind", None) == "local":
         effective_home = target_bash_home(target, env=launch_env, cwd=cwd)
         shell_init = getattr(target, "shell_init", None)
-        if shell_init_exports_env_var(shell_init, api_key_env, home=effective_home, cwd=cwd, env=launch_env):
+        shell_init_value = shell_init_exported_env_var_value(
+            shell_init,
+            api_key_env,
+            home=effective_home,
+            cwd=cwd,
+            env=launch_env,
+        )
+        if _has_nonempty_shell_value(shell_init_value):
             explicit_bootstrap_source = ("`target.shell_init`", "target.shell_init")
 
         shell = getattr(target, "shell", None)
+        shell_value = shell_template_exported_env_var_value_before_command(
+            shell if isinstance(shell, str) else None,
+            api_key_env,
+            home=effective_home,
+            cwd=cwd,
+            env=launch_env,
+        )
+        prefixed_value = shell_command_prefix_env_value(shell if isinstance(shell, str) else None, api_key_env)
         if explicit_bootstrap_source is None and (
-            shell_template_exports_env_var_before_command(
-                shell if isinstance(shell, str) else None,
-                api_key_env,
-                home=effective_home,
-                cwd=cwd,
-                env=launch_env,
-            )
-            or shell_command_prefixes_env_var(shell if isinstance(shell, str) else None, api_key_env)
+            _has_nonempty_shell_value(shell_value) or _has_nonempty_shell_value(prefixed_value)
         ):
             explicit_bootstrap_source = ("`target.shell`", "target.shell")
 
@@ -376,17 +391,27 @@ def _local_bootstrap_auth_override_source(
 
     effective_home = target_bash_home(target, env=launch_env, cwd=cwd)
     shell_init = getattr(target, "shell_init", None)
-    if shell_init_exports_env_var(shell_init, api_key_env, home=effective_home, cwd=cwd, env=launch_env):
+    if _has_nonempty_shell_value(
+        shell_init_exported_env_var_value(
+            shell_init,
+            api_key_env,
+            home=effective_home,
+            cwd=cwd,
+            env=launch_env,
+        )
+    ):
         return {"source": "target.shell_init"}
 
     shell = getattr(target, "shell", None)
-    if shell_template_exports_env_var_before_command(
-        shell if isinstance(shell, str) else None,
-        api_key_env,
-        home=effective_home,
-        cwd=cwd,
-        env=launch_env,
-    ) or shell_command_prefixes_env_var(shell if isinstance(shell, str) else None, api_key_env):
+    if _has_nonempty_shell_value(
+        shell_template_exported_env_var_value_before_command(
+            shell if isinstance(shell, str) else None,
+            api_key_env,
+            home=effective_home,
+            cwd=cwd,
+            env=launch_env,
+        )
+    ) or _has_nonempty_shell_value(shell_command_prefix_env_value(shell if isinstance(shell, str) else None, api_key_env)):
         return {"source": "target.shell"}
 
     helper_bootstrap_source = None

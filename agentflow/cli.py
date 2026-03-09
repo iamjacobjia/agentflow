@@ -34,11 +34,11 @@ from agentflow.local_shell import (
     kimi_shell_init_requires_bash_warning,
     kimi_shell_init_requires_interactive_bash_warning,
     probe_target_bash_startup_env_var,
-    shell_command_prefixes_env_var,
+    shell_command_prefix_env_value,
     shell_command_uses_kimi_helper,
-    shell_init_exports_env_var,
+    shell_init_exported_env_var_value,
     shell_init_uses_kimi_helper,
-    shell_template_exports_env_var_before_command,
+    shell_template_exported_env_var_value_before_command,
     target_bash_home,
     target_uses_interactive_bash,
     target_uses_login_bash,
@@ -913,6 +913,10 @@ def _format_timeout_seconds(value: float) -> str:
     return f"{value:g}s"
 
 
+def _has_nonempty_shell_value(value: str | None) -> bool:
+    return bool(isinstance(value, str) and value.strip())
+
+
 def _provider_credentials_local_bootstrap_probe(
     node: object,
     *,
@@ -926,25 +930,29 @@ def _provider_credentials_local_bootstrap_probe(
         launch_cwd = _local_target_launch_cwd(node, pipeline)
         effective_home = target_bash_home(target, env=launch_env, cwd=launch_cwd)
         shell_init = getattr(target, "shell_init", None)
-        if shell_init_exports_env_var(
-            shell_init,
-            api_key_env,
-            home=effective_home,
-            cwd=launch_cwd,
-            env=launch_env,
+        if _has_nonempty_shell_value(
+            shell_init_exported_env_var_value(
+                shell_init,
+                api_key_env,
+                home=effective_home,
+                cwd=launch_cwd,
+                env=launch_env,
+            )
         ):
             return _LocalBootstrapCredentialProbe(found=True)
 
         shell = getattr(target, "shell", None)
-        if shell_template_exports_env_var_before_command(
-            shell if isinstance(shell, str) else None,
-            api_key_env,
-            home=effective_home,
-            cwd=launch_cwd,
-            env=launch_env,
+        if _has_nonempty_shell_value(
+            shell_template_exported_env_var_value_before_command(
+                shell if isinstance(shell, str) else None,
+                api_key_env,
+                home=effective_home,
+                cwd=launch_cwd,
+                env=launch_env,
+            )
         ):
             return _LocalBootstrapCredentialProbe(found=True)
-        if shell_command_prefixes_env_var(shell if isinstance(shell, str) else None, api_key_env):
+        if _has_nonempty_shell_value(shell_command_prefix_env_value(shell if isinstance(shell, str) else None, api_key_env)):
             return _LocalBootstrapCredentialProbe(found=True)
 
         startup_probe = probe_target_bash_startup_env_var(
