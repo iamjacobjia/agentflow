@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 from pathlib import Path
 
@@ -352,6 +353,56 @@ async def test_local_runner_plain_shell_does_not_enable_login_mode(tmp_path: Pat
     assert result.exit_code == 0
     assert result.stdout_lines == ["missing"]
     assert result.stderr_lines == []
+
+
+@pytest.mark.asyncio
+async def test_local_runner_cancellation_escalates_when_process_ignores_sigterm(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(LocalRunner, "_TERMINATE_GRACE_SECONDS", 0.1)
+
+    node = NodeSpec.model_validate(
+        {
+            "id": "cancel-ignores-sigterm",
+            "agent": "codex",
+            "prompt": "hi",
+        }
+    )
+    prepared = PreparedExecution(
+        command=[
+            "python3",
+            "-c",
+            (
+                "import signal, time; "
+                "signal.signal(signal.SIGTERM, lambda signum, frame: None); "
+                'print("ready", flush=True); '
+                "time.sleep(60)"
+            ),
+        ],
+        env={},
+        cwd=str(tmp_path),
+        trace_kind="codex",
+    )
+
+    cancel_requested = False
+
+    async def request_cancel() -> None:
+        nonlocal cancel_requested
+        await asyncio.sleep(0.2)
+        cancel_requested = True
+
+    cancel_task = asyncio.create_task(request_cancel())
+    try:
+        result = await asyncio.wait_for(
+            LocalRunner().execute(node, prepared, _paths(tmp_path), _noop_output, lambda: cancel_requested),
+            timeout=2,
+        )
+    finally:
+        await cancel_task
+
+    assert result.cancelled is True
+    assert result.timed_out is False
+    assert result.exit_code == 130
+    assert result.stdout_lines == ["ready"]
+    assert result.stderr_lines == ["Cancelled by user"]
 
 
 def test_local_runner_plan_execution_includes_shell_wrapper(tmp_path: Path):

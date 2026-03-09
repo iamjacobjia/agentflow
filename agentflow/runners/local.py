@@ -17,6 +17,7 @@ class LocalRunner(Runner):
         "bash: initialize_job_control: no job control in background:",
         "bash: no job control in this shell",
     )
+    _TERMINATE_GRACE_SECONDS = 1.0
     _SHELL_COMMAND_PLACEHOLDER_MESSAGE = (
         "`target.shell` already includes a shell command payload. Add `{command}` where AgentFlow should inject "
         "the prepared agent command."
@@ -130,6 +131,24 @@ class LocalRunner(Runner):
             return False
         return any(text.startswith(prefix) for prefix in self._INTERACTIVE_SHELL_STDERR_NOISE)
 
+    async def _wait_for_exit(self, wait_task: asyncio.Task[int], timeout: float) -> bool:
+        if wait_task.done():
+            return True
+        try:
+            await asyncio.wait_for(asyncio.shield(wait_task), timeout=timeout)
+        except asyncio.TimeoutError:
+            return False
+        return True
+
+    async def _terminate_with_fallback(self, process, wait_task: asyncio.Task[int]) -> None:
+        with suppress(ProcessLookupError):
+            process.terminate()
+        if await self._wait_for_exit(wait_task, self._TERMINATE_GRACE_SECONDS):
+            return
+        with suppress(ProcessLookupError):
+            process.kill()
+        await self._wait_for_exit(wait_task, self._TERMINATE_GRACE_SECONDS)
+
     async def _consume_stream(self, node: NodeSpec, stream, stream_name: str, buffer: list[str], on_output: StreamCallback) -> None:
         while True:
             line = await stream.readline()
@@ -180,14 +199,15 @@ class LocalRunner(Runner):
             while not wait_task.done():
                 if should_cancel():
                     cancelled = True
-                    process.terminate()
+                    await self._terminate_with_fallback(process, wait_task)
                     break
                 if asyncio.get_running_loop().time() >= deadline:
                     timed_out = True
-                    process.kill()
+                    with suppress(ProcessLookupError):
+                        process.kill()
                     break
                 await asyncio.sleep(0.1)
-            await wait_task
+            await asyncio.shield(wait_task)
         finally:
             await asyncio.gather(stdout_task, stderr_task, return_exceptions=True)
             if timed_out:
@@ -199,9 +219,14 @@ class LocalRunner(Runner):
             with suppress(ProcessLookupError):
                 if not wait_task.done():
                     process.kill()
-                    await wait_task
+                    await asyncio.shield(wait_task)
 
-        exit_code = process.returncode if process.returncode is not None else (130 if cancelled else 124)
+        if cancelled:
+            exit_code = 130
+        elif timed_out:
+            exit_code = 124
+        else:
+            exit_code = process.returncode if process.returncode is not None else 0
         return RawExecutionResult(
             exit_code=exit_code,
             stdout_lines=stdout_lines,
