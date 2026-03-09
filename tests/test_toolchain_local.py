@@ -211,3 +211,51 @@ def test_toolchain_local_command_emits_json(monkeypatch) -> None:
         "claude_path": "/tmp/bin/claude",
         "claude_version": "Claude Code 0.0.0",
     }
+
+
+def test_toolchain_local_command_emits_json_summary(monkeypatch) -> None:
+    report = LocalToolchainReport(
+        status="ok",
+        startup_files={
+            "~/.bash_profile": "missing",
+            "~/.bash_login": "missing",
+            "~/.profile": "present",
+        },
+        bash_login_startup="~/.profile -> ~/.bashrc",
+        shell_bridge=None,
+        anthropic_base_url="https://api.kimi.com/coding/",
+        codex_auth="OPENAI_API_KEY + login",
+        codex_path="/tmp/bin/codex",
+        codex_version="codex-cli 0.0.0",
+        claude_path="/tmp/bin/claude",
+        claude_version="Claude Code 0.0.0",
+    )
+    monkeypatch.setattr("agentflow.cli.build_local_kimi_toolchain_report", lambda: report)
+
+    result = runner.invoke(app, ["toolchain-local", "--output", "json-summary"])
+
+    assert result.exit_code == 0
+    assert json.loads(result.stdout) == {
+        "status": "ok",
+        "startup": {
+            "bash_login_startup": "~/.profile -> ~/.bashrc",
+            "files": {
+                "~/.bash_profile": "missing",
+                "~/.bash_login": "missing",
+                "~/.profile": "present",
+            },
+            "shell_bridge": None,
+        },
+        "kimi": {
+            "anthropic_base_url": "https://api.kimi.com/coding/",
+        },
+        "codex": {
+            "auth": "OPENAI_API_KEY + login",
+            "path": "/tmp/bin/codex",
+            "version": "codex-cli 0.0.0",
+        },
+        "claude": {
+            "path": "/tmp/bin/claude",
+            "version": "Claude Code 0.0.0",
+        },
+    }
