@@ -14,11 +14,31 @@ if [ -z "$python_bin" ]; then
 fi
 
 tmpdir="$(mktemp -d)"
-trap 'rm -rf "$tmpdir"' EXIT
 
 pipeline_path="$tmpdir/custom-kimi-run.yaml"
 stdout_path="$tmpdir/run.stdout"
 stderr_path="$tmpdir/run.stderr"
+
+cleanup() {
+  local exit_code=$?
+  trap - EXIT
+  if [ "$exit_code" -eq 0 ]; then
+    rm -rf "$tmpdir"
+    return
+  fi
+
+  if [ -f "$stderr_path" ]; then
+    printf "\nagentflow run stderr:\n" >&2
+    sed -n '1,200p' "$stderr_path" >&2
+  fi
+  if [ -f "$stdout_path" ]; then
+    printf "\nagentflow run stdout:\n" >&2
+    sed -n '1,200p' "$stdout_path" >&2
+  fi
+  printf "\nkept tempdir for debugging: %s\n" "$tmpdir" >&2
+}
+
+trap cleanup EXIT
 
 cat >"$pipeline_path" <<'YAML'
 name: custom-kimi-run
