@@ -129,6 +129,8 @@ make run-local
 ```
 
 That shortcut uses `agentflow run examples/local-real-agents-kimi-smoke.yaml --output summary`, so it keeps the bundled maintainer path human-readable while still going through the non-smoke CLI surface that external wrappers and higher-level tooling often call.
+Use `make inspect-local-shell-init`, `make doctor-local-shell-init`, `make smoke-local-shell-init`, and `make run-local-shell-init` when you want to exercise the checked-in bundled variant that wires Kimi through explicit `shell: bash`, `shell_login: true`, `shell_interactive: true`, and `shell_init: kimi`.
+Use `make inspect-local-shell-wrapper`, `make doctor-local-shell-wrapper`, `make smoke-local-shell-wrapper`, and `make run-local-shell-wrapper` when you want to exercise the checked-in bundled variant that wires Kimi through the explicit `target.shell: "bash -lic 'command -v kimi >/dev/null 2>&1 && kimi && {command}'"` wrapper.
 
 To verify the broader "real project in another directory" path with the same local Codex + Claude-on-Kimi bootstrap, run:
 
