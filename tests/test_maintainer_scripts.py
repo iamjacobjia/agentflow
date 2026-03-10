@@ -146,6 +146,125 @@ def test_verify_local_kimi_claude_live_script_reports_success(tmp_path: Path) ->
     assert completed.stderr == ""
 
 
+def test_verify_local_kimi_codex_live_script_reports_success(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    _write_fake_shell_home(
+        home,
+        kimi_body=(
+            "export ANTHROPIC_BASE_URL=https://api.kimi.com/coding/\n"
+            "export ANTHROPIC_API_KEY=test-kimi-key\n"
+        ),
+    )
+    _write_executable(
+        home / "bin" / "codex",
+        'output_last_message=""\n'
+        'while [ "$#" -gt 0 ]; do\n'
+        '  if [ "$1" = "--output-last-message" ]; then\n'
+        '    output_last_message="$2"\n'
+        "    shift 2\n"
+        "    continue\n"
+        "  fi\n"
+        "  shift\n"
+        "done\n"
+        'printf "codex ok\\n" >"$output_last_message"\n',
+    )
+
+    repo_root = Path(__file__).resolve().parents[1]
+    script_path = repo_root / "scripts" / "verify-local-kimi-codex-live.sh"
+
+    completed = _run_script(script_path, repo_root=repo_root, home=home)
+
+    assert completed.returncode == 0
+    assert completed.stdout.strip() == "codex live probe: ok - codex ok"
+    assert completed.stderr == ""
+
+
+def test_verify_local_kimi_codex_live_script_ignores_ambient_openai_base_url(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    _write_fake_shell_home(
+        home,
+        kimi_body=(
+            "export ANTHROPIC_BASE_URL=https://api.kimi.com/coding/\n"
+            "export ANTHROPIC_API_KEY=test-kimi-key\n"
+        ),
+    )
+    _write_executable(
+        home / "bin" / "codex",
+        'output_last_message=""\n'
+        'while [ "$#" -gt 0 ]; do\n'
+        '  if [ "$1" = "--output-last-message" ]; then\n'
+        '    output_last_message="$2"\n'
+        "    shift 2\n"
+        "    continue\n"
+        "  fi\n"
+        "  shift\n"
+        "done\n"
+        'if [ -n "${OPENAI_BASE_URL:-}" ]; then\n'
+        '  printf "unexpected OPENAI_BASE_URL=%s\\n" "$OPENAI_BASE_URL" >&2\n'
+        "  exit 1\n"
+        "fi\n"
+        'printf "codex ok\\n" >"$output_last_message"\n',
+    )
+
+    repo_root = Path(__file__).resolve().parents[1]
+    script_path = repo_root / "scripts" / "verify-local-kimi-codex-live.sh"
+
+    completed = _run_script(
+        script_path,
+        repo_root=repo_root,
+        home=home,
+        OPENAI_BASE_URL="https://relay.example/openai",
+    )
+
+    assert completed.returncode == 0
+    assert completed.stdout.strip() == "codex live probe: ok - codex ok"
+    assert completed.stderr == ""
+
+
+def test_verify_local_kimi_codex_live_script_reports_provider_error_details(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    _write_fake_shell_home(
+        home,
+        kimi_body=(
+            "export ANTHROPIC_BASE_URL=https://api.kimi.com/coding/\n"
+            "export ANTHROPIC_API_KEY=test-kimi-key\n"
+        ),
+    )
+    _write_executable(
+        home / "bin" / "codex",
+        'output_last_message=""\n'
+        'while [ "$#" -gt 0 ]; do\n'
+        '  if [ "$1" = "--output-last-message" ]; then\n'
+        '    output_last_message="$2"\n'
+        "    shift 2\n"
+        "    continue\n"
+        "  fi\n"
+        "  shift\n"
+        "done\n"
+        'printf "API Error: 429 rate limit\\n"\n'
+        'printf "provider request failed\\n" >&2\n'
+        "exit 1\n",
+    )
+
+    repo_root = Path(__file__).resolve().parents[1]
+    script_path = repo_root / "scripts" / "verify-local-kimi-codex-live.sh"
+
+    completed = _run_script(script_path, repo_root=repo_root, home=home)
+
+    assert completed.returncode == 1
+    assert completed.stdout == ""
+    assert "codex live probe failed in the Kimi-backed bash login shell." in completed.stderr
+    assert "codex live probe stdout:" in completed.stderr
+    assert "API Error: 429 rate limit" in completed.stderr
+    assert "codex live probe stderr:" in completed.stderr
+    assert "provider request failed" in completed.stderr
+    assert "kept tempdir for debugging:" in completed.stderr
+    assert "bash: cannot set terminal process group (" not in completed.stderr
+
+
 def test_verify_local_kimi_claude_live_script_ignores_ambient_anthropic_env(tmp_path: Path) -> None:
     home = tmp_path / "home"
     home.mkdir()
