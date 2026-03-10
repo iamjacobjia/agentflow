@@ -115,6 +115,72 @@ def test_verify_local_kimi_shell_script_reports_bash_profile_startup_when_presen
     assert completed.stderr == ""
 
 
+def test_verify_local_kimi_claude_live_script_reports_success(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    _write_fake_shell_home(
+        home,
+        kimi_body=(
+            "export ANTHROPIC_BASE_URL=https://api.kimi.com/coding/\n"
+            "export ANTHROPIC_API_KEY=test-kimi-key\n"
+        ),
+    )
+    _write_executable(
+        home / "bin" / "claude",
+        'for arg in "$@"; do\n'
+        '  if [ "$arg" = "-p" ] || [ "$arg" = "--print" ]; then\n'
+        '    printf "claude ok\\n"\n'
+        "    exit 0\n"
+        "  fi\n"
+        "done\n"
+        'printf "Claude Code 0.0.0\\n"\n',
+    )
+
+    repo_root = Path(__file__).resolve().parents[1]
+    script_path = repo_root / "scripts" / "verify-local-kimi-claude-live.sh"
+
+    completed = _run_script(script_path, repo_root=repo_root, home=home)
+
+    assert completed.returncode == 0
+    assert completed.stdout.strip() == "claude live probe: ok - claude ok"
+    assert completed.stderr == ""
+
+
+def test_verify_local_kimi_claude_live_script_reports_provider_error_details(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    _write_fake_shell_home(
+        home,
+        kimi_body=(
+            "export ANTHROPIC_BASE_URL=https://api.kimi.com/coding/\n"
+            "export ANTHROPIC_API_KEY=test-kimi-key\n"
+        ),
+    )
+    _write_executable(
+        home / "bin" / "claude",
+        'for arg in "$@"; do\n'
+        '  if [ "$arg" = "-p" ] || [ "$arg" = "--print" ]; then\n'
+        '    printf "API Error: 402 {\\"error\\":{\\"type\\":\\"invalid_request_error\\",\\"message\\":\\"membership required\\"}}\\n"\n'
+        "    exit 1\n"
+        "  fi\n"
+        "done\n"
+        'printf "Claude Code 0.0.0\\n"\n',
+    )
+
+    repo_root = Path(__file__).resolve().parents[1]
+    script_path = repo_root / "scripts" / "verify-local-kimi-claude-live.sh"
+
+    completed = _run_script(script_path, repo_root=repo_root, home=home)
+
+    assert completed.returncode == 1
+    assert completed.stdout == ""
+    assert "claude live probe failed in the Kimi-backed bash login shell." in completed.stderr
+    assert "claude live probe stdout:" in completed.stderr
+    assert 'API Error: 402 {"error":{"type":"invalid_request_error","message":"membership required"}}' in completed.stderr
+    assert "kept tempdir for debugging:" in completed.stderr
+    assert "bash: cannot set terminal process group (" not in completed.stderr
+
+
 def test_make_python_target_prints_repo_python_path() -> None:
     repo_root = Path(__file__).resolve().parents[1]
 
