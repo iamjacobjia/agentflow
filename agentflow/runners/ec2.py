@@ -118,21 +118,48 @@ class EC2Runner(Runner):
                     timed_out=False, cancelled=True,
                 )
 
+            from types import SimpleNamespace
+            from agentflow.cloud.aws import collect_local_credentials, discover_networking
+
+            needs_patch = False
+
+            # Auto-discover AMI if not specified
+            if not target.ami:
+                from agentflow.cloud.aws import discover_ubuntu_ami
+                await on_output("stderr", f"Finding latest Ubuntu AMI in {target.region}...")
+                ami = await asyncio.to_thread(discover_ubuntu_ami, target.region)
+                target = SimpleNamespace(**{k: getattr(target, k) for k in target.model_fields})
+                target.ami = ami
+                needs_patch = True
+                await on_output("stderr", f"Using AMI {ami}")
+
+            # Auto-create key pair if not specified
+            if not target.key_name:
+                from agentflow.cloud.aws import ensure_key_pair
+                await on_output("stderr", "Ensuring SSH key pair...")
+                key_name, identity_file = await asyncio.to_thread(ensure_key_pair, target.region)
+                if not needs_patch:
+                    target = SimpleNamespace(**{k: getattr(target, k) for k in target.model_fields})
+                    needs_patch = True
+                target.key_name = key_name
+                target.identity_file = identity_file
+                await on_output("stderr", f"Using key pair {key_name}")
+
             # Auto-discover networking if not specified
             if not target.security_group_ids:
-                from agentflow.cloud.aws import discover_networking
                 await on_output("stderr", "Auto-discovering VPC networking...")
                 net = await asyncio.to_thread(discover_networking, target.region)
-                from types import SimpleNamespace
-                target = SimpleNamespace(**{k: getattr(target, k) for k in target.model_fields})
+                if not needs_patch:
+                    target = SimpleNamespace(**{k: getattr(target, k) for k in target.model_fields})
+                    needs_patch = True
                 target.security_group_ids = net["security_groups"]
                 if not target.subnet_id:
                     target.subnet_id = net["subnets"][0]
-                # Patch node.target for _launch_instance
+
+            if needs_patch:
                 node = SimpleNamespace(id=node.id, agent=node.agent, target=target, timeout_seconds=node.timeout_seconds)
 
             # Auto-forward local credentials
-            from agentflow.cloud.aws import collect_local_credentials
             local_creds = collect_local_credentials(node.agent.value)
             merged_env = {**local_creds, **prepared.env}
             prepared = PreparedExecution(
