@@ -409,6 +409,19 @@ class ContainerTarget(BaseModel):
     entrypoint: str | None = None
 
 
+class SSHTarget(BaseModel):
+    """Remote execution via SSH."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    kind: Literal["ssh"] = "ssh"
+    host: str
+    port: int = 22
+    username: str | None = None
+    identity_file: str | None = None
+    remote_workdir: str | None = None
+
+
 class AwsLambdaTarget(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -420,7 +433,7 @@ class AwsLambdaTarget(BaseModel):
     invocation_type: Literal["RequestResponse", "Event"] = "RequestResponse"
 
 
-TargetSpec = Annotated[LocalTarget | ContainerTarget | AwsLambdaTarget, Field(discriminator="kind")]
+TargetSpec = Annotated[LocalTarget | ContainerTarget | SSHTarget | AwsLambdaTarget, Field(discriminator="kind")]
 
 
 class OutputContainsCriterion(BaseModel):
