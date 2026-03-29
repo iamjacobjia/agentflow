@@ -727,15 +727,17 @@ class Orchestrator:
                     remaining.remove(node_id)
                     await self._publish(run_id, "node_skipped", node_id=node_id, reason="fail_fast")
 
-            # Collect nodes that have on_failure_restart edges pointing at them
-            cycle_targets: set[str] = set()
+            # Collect nodes involved in cycles (both targets and tail nodes)
+            cycle_nodes: set[str] = set()
             for n in pipeline.nodes:
-                cycle_targets.update(n.on_failure_restart)
+                if n.on_failure_restart:
+                    cycle_nodes.add(n.id)  # tail node (has the back-edge)
+                    cycle_nodes.update(n.on_failure_restart)  # restart targets
 
             blocked = [
                 node_id
                 for node_id in list(remaining)
-                if node_id not in cycle_targets  # don't skip cycle targets
+                if node_id not in cycle_nodes  # don't skip any node in a cycle
                 and any(record.nodes[dependency].status in {NodeStatus.FAILED, NodeStatus.SKIPPED, NodeStatus.CANCELLED} for dependency in node_map[node_id].depends_on)
             ]
             for node_id in blocked:
@@ -764,7 +766,12 @@ class Orchestrator:
                 if node_id in in_progress:
                     continue
                 node = node_map[node_id]
-                if not all(record.nodes[dependency].status == NodeStatus.COMPLETED for dependency in node.depends_on):
+                # Cycle nodes can proceed when deps are COMPLETED or FAILED
+                if node_id in cycle_nodes or node.on_failure_restart:
+                    terminal = {NodeStatus.COMPLETED, NodeStatus.FAILED}
+                    if not all(record.nodes[dep].status in terminal for dep in node.depends_on):
+                        continue
+                elif not all(record.nodes[dep].status == NodeStatus.COMPLETED for dep in node.depends_on):
                     continue
                 if node.schedule is None:
                     ready.append(node_id)
