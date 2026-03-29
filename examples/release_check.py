@@ -1,7 +1,7 @@
-from agentflow import DAG, claude, codex
+from agentflow import Graph, claude, codex
 
 
-with DAG("release-check", working_dir=".", concurrency=3) as dag:
+with Graph("release-check", working_dir=".", concurrency=3) as dag:
     tests = codex(
         task_id="tests",
         prompt="Run the test suite and report the results.",

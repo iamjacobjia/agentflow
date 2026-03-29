@@ -12,12 +12,27 @@ from typing import Any
 from agentflow.specs import AgentKind, LocalTarget, NodeSpec, PipelineSpec
 
 
-_CURRENT_DAG: ContextVar["DAG | None"] = ContextVar("_CURRENT_DAG", default=None)
+_CURRENT_GRAPH: ContextVar["Graph | None"] = ContextVar("_CURRENT_GRAPH", default=None)
+
+
+@dataclass
+class _FailureEdge:
+    """Proxy returned by ``node.on_failure`` for building back-edges."""
+
+    source: "NodeBuilder"
+
+    def __rshift__(self, target: "NodeBuilder | list[NodeBuilder]") -> "NodeBuilder | list[NodeBuilder]":
+        if isinstance(target, list):
+            for t in target:
+                self.source.kwargs.setdefault("on_failure_restart", []).append(t.id)
+            return target
+        self.source.kwargs.setdefault("on_failure_restart", []).append(target.id)
+        return target
 
 
 @dataclass
 class NodeBuilder:
-    dag: "DAG"
+    dag: "Graph"
     id: str
     agent: AgentKind
     prompt: str
@@ -54,11 +69,16 @@ class NodeBuilder:
             **_normalize_node_kwargs(self.kwargs),
         }
 
+    @property
+    def on_failure(self) -> _FailureEdge:
+        """Return a proxy for ``node.on_failure >> target`` back-edges."""
+        return _FailureEdge(source=self)
+
     def to_spec(self) -> NodeSpec:
         return NodeSpec.model_validate(self.to_payload())
 
 
-class DAG:
+class Graph:
     def __init__(
         self,
         name: str,
@@ -67,6 +87,7 @@ class DAG:
         working_dir: str = ".",
         concurrency: int = 4,
         fail_fast: bool = False,
+        max_iterations: int = 10,
         node_defaults: dict[str, Any] | None = None,
         agent_defaults: dict[str | AgentKind, dict[str, Any]] | None = None,
         local_target_defaults: dict[str, Any] | LocalTarget | None = None,
@@ -76,17 +97,18 @@ class DAG:
         self.working_dir = working_dir
         self.concurrency = concurrency
         self.fail_fast = fail_fast
+        self.max_iterations = max_iterations
         self.node_defaults = node_defaults
         self.agent_defaults = agent_defaults
         self.local_target_defaults = local_target_defaults
         self._nodes: dict[str, NodeBuilder] = {}
-        self._token: Token[DAG | None] | None = None
+        self._token: Token[Graph | None] | None = None
 
     def __repr__(self) -> str:
-        return f"DAG(name={json.dumps(self.name)}, nodes={len(self._nodes)})"
+        return f"Graph(name={json.dumps(self.name)}, nodes={len(self._nodes)})"
 
-    def __enter__(self) -> "DAG":
-        self._token = _CURRENT_DAG.set(self)
+    def __enter__(self) -> "Graph":
+        self._token = _CURRENT_GRAPH.set(self)
         return self
 
     def __exit__(
@@ -96,7 +118,7 @@ class DAG:
         tb: TracebackType | None,
     ) -> None:
         if self._token is not None:
-            _CURRENT_DAG.reset(self._token)
+            _CURRENT_GRAPH.reset(self._token)
 
     def _register(self, node: NodeBuilder) -> None:
         if node.id in self._nodes:
@@ -112,6 +134,7 @@ class DAG:
         payload["working_dir"] = self.working_dir
         payload["concurrency"] = self.concurrency
         payload["fail_fast"] = self.fail_fast
+        payload["max_iterations"] = self.max_iterations
         if self.node_defaults is not None:
             payload["node_defaults"] = _normalize_node_defaults(self.node_defaults)
         if self.agent_defaults:
@@ -162,15 +185,18 @@ def _normalize_agent_defaults(
     }
 
 
-def _current_dag() -> DAG:
-    dag = _CURRENT_DAG.get()
-    if dag is None:
-        raise RuntimeError("No active DAG context. Use `with DAG(...):`.")
-    return dag
+DAG = Graph  # backward compatibility
+
+
+def _current_graph() -> Graph:
+    g = _CURRENT_GRAPH.get()
+    if g is None:
+        raise RuntimeError("No active Graph context. Use `with Graph(...):`.")
+    return g
 
 
 def _node(agent: AgentKind, *, task_id: str, prompt: str, **kwargs: Any) -> NodeBuilder:
-    return NodeBuilder(dag=_current_dag(), id=task_id, agent=agent, prompt=prompt, kwargs=kwargs)
+    return NodeBuilder(dag=_current_graph(), id=task_id, agent=agent, prompt=prompt, kwargs=kwargs)
 
 
 # ---------------------------------------------------------------------------

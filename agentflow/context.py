@@ -118,6 +118,7 @@ def _current_node_context(
     *,
     current_tick_number: int | None = None,
     current_tick_started_at: str | None = None,
+    current_iteration: int | None = None,
 ) -> dict[str, Any]:
     context: dict[str, Any] = {
         "id": node.id,
@@ -137,6 +138,8 @@ def _current_node_context(
         context["tick_number"] = current_tick_number
     if current_tick_started_at is not None:
         context["tick_started_at"] = current_tick_started_at
+    if current_iteration is not None:
+        context["iteration"] = current_iteration
     return context
 
 

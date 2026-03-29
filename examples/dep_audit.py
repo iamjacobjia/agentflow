@@ -1,4 +1,4 @@
-from agentflow import DAG, claude, codex, fanout
+from agentflow import Graph, claude, codex, fanout
 
 
 dependencies = [
@@ -12,7 +12,7 @@ dependencies = [
 ]
 
 
-with DAG("dependency-audit", working_dir=".", concurrency=7) as dag:
+with Graph("dependency-audit", working_dir=".", concurrency=7) as dag:
     dependency_audit = fanout(
         codex(
             task_id="dependency_audit",

@@ -113,18 +113,19 @@ def test_pipeline_validation_rejects_agent_field_inside_agent_defaults():
         )
 
 
-def test_pipeline_validation_rejects_cycles():
-    with pytest.raises(ValueError, match="cycle detected"):
-        PipelineSpec.model_validate(
-            {
-                "name": "cycle",
-                "working_dir": ".",
-                "nodes": [
-                    {"id": "a", "agent": "codex", "prompt": "a", "depends_on": ["b"]},
-                    {"id": "b", "agent": "codex", "prompt": "b", "depends_on": ["a"]},
-                ],
-            }
-        )
+def test_pipeline_validation_accepts_cycles():
+    pipeline = PipelineSpec.model_validate(
+        {
+            "name": "cycle",
+            "working_dir": ".",
+            "nodes": [
+                {"id": "a", "agent": "codex", "prompt": "a", "depends_on": ["b"]},
+                {"id": "b", "agent": "codex", "prompt": "b", "depends_on": ["a"]},
+            ],
+        }
+    )
+    assert pipeline.node_map["a"].depends_on == ["b"]
+    assert pipeline.node_map["b"].depends_on == ["a"]
 
 
 def test_pipeline_validation_rejects_codex_kimi_provider_alias():

@@ -1,6 +1,6 @@
-from agentflow import DAG, claude, codex
+from agentflow import Graph, claude, codex
 
-with DAG(
+with Graph(
     "local-real-agents-kimi-shell-init-smoke",
     description="Minimal parallel real-agent smoke test for local Codex plus Claude-on-Kimi via explicit shell_init bootstrap.",
     working_dir=".",

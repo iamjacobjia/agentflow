@@ -716,6 +716,7 @@ class NodeSpec(BaseModel):
     agent: AgentKind
     prompt: str
     depends_on: list[str] = Field(default_factory=list)
+    on_failure_restart: list[str] = Field(default_factory=list)
     model: str | None = None
     provider: str | ProviderConfig | None = None
     tools: ToolAccess = ToolAccess.READ_ONLY
@@ -1379,6 +1380,7 @@ class PipelineSpec(BaseModel):
     working_dir: str = "."
     concurrency: int = Field(default=4, ge=1)
     fail_fast: bool = False
+    max_iterations: int = Field(default=10, ge=1)
     node_defaults: dict[str, Any] | None = None
     agent_defaults: dict[AgentKind, dict[str, Any]] = Field(default_factory=dict)
     local_target_defaults: LocalTarget | None = None
@@ -1437,27 +1439,7 @@ class PipelineSpec(BaseModel):
                 raise ValueError(
                     f"scheduled node {node.id!r} must appear after the watched fanout group `{watched_group}`"
                 )
-        self._validate_acyclic_graph()
         return self
-
-    def _validate_acyclic_graph(self) -> None:
-        visited: set[str] = set()
-        visiting: set[str] = set()
-
-        def visit(node_id: str, graph: dict[str, NodeSpec]) -> None:
-            if node_id in visiting:
-                raise ValueError(f"cycle detected involving node {node_id!r}")
-            if node_id in visited:
-                return
-            visiting.add(node_id)
-            for dependency in graph[node_id].depends_on:
-                visit(dependency, graph)
-            visiting.remove(node_id)
-            visited.add(node_id)
-
-        graph = self.node_map
-        for node_id in graph:
-            visit(node_id, graph)
 
     @property
     def node_map(self) -> dict[str, NodeSpec]:

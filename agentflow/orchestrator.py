@@ -107,6 +107,41 @@ class Orchestrator:
             except KeyError:
                 pass
 
+    @staticmethod
+    def _reset_node_for_cycle(record: "RunRecord", node_id: str, remaining: set[str]) -> None:
+        """Reset a node to PENDING so it can be re-executed in a cycle."""
+        node_result = record.nodes.get(node_id)
+        if node_result is None:
+            return
+        node_result.status = NodeStatus.PENDING
+        node_result.finished_at = None
+        node_result.output = None
+        node_result.exit_code = None
+        node_result.success = None
+        node_result.success_details = []
+        remaining.add(node_id)
+
+    @staticmethod
+    def _nodes_between(node_map: dict[str, "NodeSpec"], start_id: str, end_id: str) -> list[str]:
+        """Find node IDs on the path from start to end (exclusive of both endpoints)."""
+        # BFS forward from start following depends_on edges in reverse
+        reverse_deps: dict[str, list[str]] = {}
+        for nid, node in node_map.items():
+            for dep in node.depends_on:
+                reverse_deps.setdefault(dep, []).append(nid)
+
+        visited: set[str] = set()
+        queue = [start_id]
+        while queue:
+            current = queue.pop(0)
+            for downstream in reverse_deps.get(current, []):
+                if downstream == end_id:
+                    continue
+                if downstream not in visited:
+                    visited.add(downstream)
+                    queue.append(downstream)
+        return [nid for nid in visited if nid != start_id]
+
     def _register_shared_resources(self, pipeline: "PipelineSpec") -> None:
         """Scan nodes for shared targets and pre-register expected ref counts."""
         from collections import Counter
@@ -642,6 +677,7 @@ class Orchestrator:
         await self.store.persist_run(run_id)
 
         node_map = pipeline.node_map
+        iteration_counts: dict[tuple[str, str], int] = {}
 
         # Pre-register shared resource counts so instances survive between sequential nodes
         self._register_shared_resources(pipeline)
@@ -691,10 +727,16 @@ class Orchestrator:
                     remaining.remove(node_id)
                     await self._publish(run_id, "node_skipped", node_id=node_id, reason="fail_fast")
 
+            # Collect nodes that have on_failure_restart edges pointing at them
+            cycle_targets: set[str] = set()
+            for n in pipeline.nodes:
+                cycle_targets.update(n.on_failure_restart)
+
             blocked = [
                 node_id
                 for node_id in list(remaining)
-                if any(record.nodes[dependency].status in {NodeStatus.FAILED, NodeStatus.SKIPPED, NodeStatus.CANCELLED} for dependency in node_map[node_id].depends_on)
+                if node_id not in cycle_targets  # don't skip cycle targets
+                and any(record.nodes[dependency].status in {NodeStatus.FAILED, NodeStatus.SKIPPED, NodeStatus.CANCELLED} for dependency in node_map[node_id].depends_on)
             ]
             for node_id in blocked:
                 record.nodes[node_id].status = NodeStatus.SKIPPED
@@ -803,6 +845,39 @@ class Orchestrator:
                                     next_scheduled_at=node_result.next_scheduled_at,
                                 )
                                 await self.store.persist_run(run_id)
+
+                    # -- on_failure_restart: cycle back-edge handling --
+                    if (
+                        record.nodes[node_id].status == NodeStatus.FAILED
+                        and node.on_failure_restart
+                        and not self._should_cancel(run_id)
+                    ):
+                        iteration_key = (run_id, node_id)
+                        iteration_counts[iteration_key] = iteration_counts.get(iteration_key, 0) + 1
+                        if iteration_counts[iteration_key] < pipeline.max_iterations:
+                            await self._publish(
+                                run_id, "node_cycle_restart",
+                                node_id=node_id,
+                                iteration=iteration_counts[iteration_key],
+                                restart_targets=node.on_failure_restart,
+                            )
+                            # Reset the failed node itself
+                            record.nodes[node_id].status = NodeStatus.PENDING
+                            record.nodes[node_id].finished_at = None
+                            remaining.add(node_id)
+                            # Reset all restart targets and their downstream chain
+                            for target_id in node.on_failure_restart:
+                                self._reset_node_for_cycle(record, target_id, remaining)
+                                # Also reset nodes between target and this node
+                                for mid_id in self._nodes_between(node_map, target_id, node_id):
+                                    self._reset_node_for_cycle(record, mid_id, remaining)
+                            await self.store.persist_run(run_id)
+                        else:
+                            await self._publish(
+                                run_id, "node_cycle_exhausted",
+                                node_id=node_id,
+                                max_iterations=pipeline.max_iterations,
+                            )
 
                     if (
                         node_id in self._pending_node_reruns.setdefault(run_id, set())

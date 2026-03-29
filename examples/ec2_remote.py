@@ -1,6 +1,6 @@
-from agentflow import DAG, codex, claude
+from agentflow import Graph, codex, claude
 
-with DAG("ec2-remote-demo", working_dir=".", concurrency=2) as dag:
+with Graph("ec2-remote-demo", working_dir=".", concurrency=2) as dag:
     scan = codex(
         task_id="scan",
         prompt="Run 'uname -a' and 'cat /etc/os-release' and report what system you are on.",

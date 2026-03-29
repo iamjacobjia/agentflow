@@ -1,7 +1,7 @@
-from agentflow import DAG, claude, codex, fanout
+from agentflow import Graph, claude, codex, fanout
 
 
-with DAG("code-review-example", working_dir=".", concurrency=6) as dag:
+with Graph("code-review-example", working_dir=".", concurrency=6) as dag:
     scan = codex(
         task_id="scan",
         prompt=(

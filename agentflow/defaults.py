@@ -120,9 +120,9 @@ def _render_codex_repo_sweep_batched_template(values: Mapping[str, str] | None =
 #   agentflow inspect repo-sweep-batched.py --output summary
 #   agentflow run repo-sweep-batched.py
 
-from agentflow import DAG, codex, fanout, merge
+from agentflow import Graph, codex, fanout, merge
 
-with DAG(
+with Graph(
     "$name",
     description="Configurable $shards-shard Codex repository sweep with batched reducers for maintainer review.",
     working_dir="$working_dir",

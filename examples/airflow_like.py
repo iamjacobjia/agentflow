@@ -1,7 +1,7 @@
-from agentflow import DAG, claude, codex, kimi
+from agentflow import Graph, claude, codex, kimi
 
 
-with DAG("airflow-like-example", working_dir=".", concurrency=3) as dag:
+with Graph("airflow-like-example", working_dir=".", concurrency=3) as dag:
     plan = codex(
         task_id="plan",
         prompt="Inspect the repo and produce a concise plan.",

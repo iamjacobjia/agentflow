@@ -1,6 +1,6 @@
-from agentflow import DAG, codex, claude
+from agentflow import Graph, codex, claude
 
-with DAG("ecs-fargate-demo", working_dir=".", concurrency=2) as dag:
+with Graph("ecs-fargate-demo", working_dir=".", concurrency=2) as dag:
     task = codex(
         task_id="task",
         prompt="Echo hello from ECS Fargate and list the current directory.",

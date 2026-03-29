@@ -1,7 +1,7 @@
-from agentflow import DAG, codex, claude, fanout
+from agentflow import Graph, codex, claude, fanout
 
 
-with DAG("test-gap-analysis", working_dir=".", concurrency=6) as dag:
+with Graph("test-gap-analysis", working_dir=".", concurrency=6) as dag:
     analyze = codex(
         task_id="analyze",
         prompt=(

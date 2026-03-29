@@ -1,7 +1,7 @@
-from agentflow import DAG, claude, codex
+from agentflow import Graph, claude, codex
 
 
-with DAG("multi-agent-debate") as dag:
+with Graph("multi-agent-debate") as dag:
     codex_solve = codex(
         task_id="codex_solve",
         prompt="Propose a solution to improve error handling in the codebase.",

@@ -5,7 +5,7 @@ import sys
 import pytest
 
 from agentflow import (
-    DAG,
+    Graph,
     claude,
     codex,
     fanout,
@@ -28,7 +28,7 @@ def _run_example(name: str):
 
 
 def test_fanout_and_merge_build_correct_payloads():
-    with DAG("payload-test") as dag:
+    with Graph("payload-test") as dag:
         # count
         n = fanout(codex(task_id="c", prompt="p"), 3)
         assert n.kwargs["fanout"] == {"count": 3, "as": "item"}
@@ -98,33 +98,33 @@ def test_fanout_and_merge_build_correct_payloads():
 
 
 def test_fanout_rejects_invalid_source_type():
-    with DAG("err-test") as dag:
+    with Graph("err-test") as dag:
         with pytest.raises(TypeError, match="int, list, or dict"):
             fanout(codex(task_id="bad", prompt="p"), "not_valid")
 
 
 def test_fanout_rejects_include_on_non_matrix():
-    with DAG("err-test2") as dag:
+    with Graph("err-test2") as dag:
         with pytest.raises(TypeError, match="include is only valid for matrix"):
             fanout(codex(task_id="bad", prompt="p"), [1, 2], include=[{}])
 
 
 def test_merge_rejects_both_by_and_size():
-    with DAG("err-test3") as dag:
+    with Graph("err-test3") as dag:
         src = codex(task_id="src", prompt="p")
         with pytest.raises(TypeError, match="either by= or size="):
             merge(codex(task_id="bad", prompt="p"), src, by=["x"], size=2)
 
 
 def test_merge_rejects_neither_by_nor_size():
-    with DAG("err-test4") as dag:
+    with Graph("err-test4") as dag:
         src = codex(task_id="src", prompt="p")
         with pytest.raises(TypeError, match="requires either by= or size="):
             merge(codex(task_id="bad", prompt="p"), src)
 
 
 def test_airflow_like_dag_builds_dependencies():
-    with DAG("demo", working_dir="/tmp/work", concurrency=2) as dag:
+    with Graph("demo", working_dir="/tmp/work", concurrency=2) as dag:
         plan = codex(task_id="plan", prompt="plan")
         implement = claude(task_id="implement", prompt="implement")
         review = kimi(task_id="review", prompt="review")
@@ -143,11 +143,11 @@ def test_airflow_like_dag_builds_dependencies():
 
 
 def test_dag_and_node_repr_and_payload_isolation():
-    with DAG("demo") as dag:
+    with Graph("demo") as dag:
         plan = codex(task_id="plan", prompt="plan")
 
     assert repr(plan) == 'NodeBuilder(id="plan", agent="codex")'
-    assert repr(dag) == 'DAG(name="demo", nodes=1)'
+    assert repr(dag) == 'Graph(name="demo", nodes=1)'
 
     payload = plan.to_payload()
     payload["depends_on"].append("other")
@@ -155,7 +155,7 @@ def test_dag_and_node_repr_and_payload_isolation():
 
 
 def test_airflow_like_dag_applies_local_target_defaults():
-    with DAG(
+    with Graph(
         "local-defaults",
         local_target_defaults={
             "shell": "bash",
@@ -177,7 +177,7 @@ def test_airflow_like_dag_applies_local_target_defaults():
 
 
 def test_airflow_like_dag_supports_pipeline_defaults_and_count_fanout():
-    with DAG(
+    with Graph(
         "fanout-defaults",
         working_dir="/tmp/fanout-work",
         concurrency=16,
@@ -236,7 +236,7 @@ def test_airflow_like_dag_supports_pipeline_defaults_and_count_fanout():
 
 
 def test_airflow_like_dag_supports_matrix_and_batch_merge():
-    with DAG(
+    with Graph(
         "batched-fuzz",
         working_dir="/tmp/batched-fuzz",
         concurrency=8,
@@ -303,7 +303,7 @@ def test_airflow_like_dag_supports_matrix_and_batch_merge():
 
 
 def test_airflow_like_dag_supports_grouped_merge():
-    with DAG(
+    with Graph(
         "grouped-fuzz",
         working_dir="/tmp/grouped-fuzz",
         concurrency=8,
@@ -366,7 +366,7 @@ def test_airflow_like_dag_supports_grouped_merge():
 
 
 def test_airflow_like_dag_can_render_json():
-    with DAG(
+    with Graph(
         "render-demo",
         description="render helpers",
         working_dir="/tmp/render-demo",

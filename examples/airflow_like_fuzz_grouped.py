@@ -1,7 +1,7 @@
-from agentflow import DAG, codex, fanout, merge
+from agentflow import Graph, codex, fanout, merge
 
 
-with DAG(
+with Graph(
     "airflow-like-fuzz-grouped-128",
     description="Python-authored 128-shard Codex fuzz matrix with grouped reducers.",
     working_dir="./codex_fuzz_python_grouped_128",
