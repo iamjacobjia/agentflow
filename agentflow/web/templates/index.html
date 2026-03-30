@@ -18,7 +18,7 @@
         --panel-alt: #ffffff;
         --border: #d0d7de;
         --border-strong: rgba(9, 105, 218, 0.28);
-        --text: #1f2328;
+        --text: #24292f;
         --muted: #57606a;
         --link: #0969da;
         --success: #1a7f37;
@@ -41,6 +41,7 @@
       body {
         margin: 0;
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+        font-size: 13px;
         color: var(--text);
         background: var(--bg);
       }
@@ -109,7 +110,7 @@
 
       .brand h1 {
         margin: 0;
-        font-size: clamp(2rem, 3vw, 2.5rem);
+        font-size: 1.2rem;
         font-weight: 800;
         letter-spacing: -0.08em;
         color: var(--text);
@@ -135,13 +136,13 @@
         margin-bottom: 6px;
         color: var(--muted);
         font-size: 0.72rem;
-        text-transform: uppercase;
-        letter-spacing: 0.08em;
+        text-transform: none;
+        letter-spacing: normal;
       }
 
       .metric strong {
         color: var(--text);
-        font-size: 1.4rem;
+        font-size: 1.1rem;
         font-weight: 700;
       }
 
@@ -168,7 +169,7 @@
         flex: 1;
         min-height: 0;
         display: grid;
-        grid-template-columns: minmax(280px, 1fr) minmax(0, 2fr) minmax(0, 2fr);
+        grid-template-columns: 240px 1fr 360px;
         gap: 18px;
       }
 
@@ -206,7 +207,7 @@
       .panel-header h2 {
         margin: 0;
         color: var(--muted);
-        font-size: 13px;
+        font-size: 12px;
         font-weight: 700;
         text-transform: uppercase;
         letter-spacing: 0.05em;
@@ -295,7 +296,7 @@
 
       .small {
         color: var(--muted);
-        font-size: 0.76rem;
+        font-size: 11px;
         line-height: 1.55;
       }
 
@@ -539,8 +540,8 @@
         color: var(--muted);
         font-size: 0.74rem;
         font-weight: 700;
-        text-transform: uppercase;
-        letter-spacing: 0.08em;
+        text-transform: none;
+        letter-spacing: normal;
       }
 
       .output-box,

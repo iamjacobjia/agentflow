@@ -154,6 +154,12 @@ function truncateGraphLabel(value, maxLength) {
   return text.length > maxLength ? `${text.slice(0, Math.max(0, maxLength - 3))}...` : text;
 }
 
+function graphNodeShortName(nodeId) {
+  const text = String(nodeId ?? "");
+  if (!text) return "";
+  return text.split("/").pop() || text;
+}
+
 function ensureGraphNodeTooltip() {
   if (!document.getElementById("graph-node-tooltip-styles")) {
     const style = document.createElement("style");
@@ -330,16 +336,20 @@ function graphLayout(nodes) {
     maxLevel = Math.max(maxLevel, level);
   });
 
-  const nodeWidth = 120;
-  const nodeHeight = 50;
+  const nodeWidth = 140;
+  const nodeHeight = 54;
   const nodeGap = 10;
   const levelGap = 10;
   const fanoutColumns = 8;
+  const fanoutGroupLabelHeight = 10;
+  const fanoutGroupLabelGap = 4;
+  const fanoutGroupGap = 8;
   const margin = { top: 32, right: 32, bottom: 32, left: 32 };
   const levelLayouts = {};
   let maxLevelHeight = nodeHeight;
   let contentWidth = 0;
   const positions = {};
+  const fanoutRowDecorations = [];
 
   for (let level = 0; level <= maxLevel; level += 1) {
     const group = groups[level] || [];
@@ -364,11 +374,14 @@ function graphLayout(nodes) {
       const fanoutNodes = fanoutNodesByGroup[fanoutGroupId] || [];
       const columns = Math.max(1, Math.min(fanoutColumns, fanoutNodes.length));
       const rows = Math.max(1, Math.ceil(fanoutNodes.length / fanoutColumns));
+      const fanoutRowsHeight = rows * (fanoutGroupLabelHeight + fanoutGroupLabelGap + nodeHeight);
       blocks.push({
         type: "fanout",
+        groupId: fanoutGroupId,
         nodes: fanoutNodes,
+        rows,
         width: columns * nodeWidth + Math.max(0, columns - 1) * nodeGap,
-        height: rows * nodeHeight + Math.max(0, rows - 1) * nodeGap,
+        height: fanoutRowsHeight + Math.max(0, rows - 1) * fanoutGroupGap,
       });
     });
 
@@ -397,12 +410,25 @@ function graphLayout(nodes) {
     let nextBlockY = margin.top + Math.max(0, (sceneHeight - margin.top - margin.bottom - levelLayout.height) / 2);
     levelLayout.blocks.forEach((block) => {
       if (block.type === "fanout") {
+        for (let row = 0; row < block.rows; row += 1) {
+          const startIndex = row * fanoutColumns;
+          const endIndex = Math.min(block.nodes.length, startIndex + fanoutColumns);
+          const rowTop = nextBlockY + row * (fanoutGroupLabelHeight + fanoutGroupLabelGap + nodeHeight + fanoutGroupGap);
+          fanoutRowDecorations.push({
+            label: `${block.groupId} ${startIndex + 1}-${endIndex}`,
+            x: levelX[level],
+            width: block.width,
+            labelY: rowTop + 8,
+            separatorY: rowTop + fanoutGroupLabelHeight + 1,
+          });
+        }
         block.nodes.forEach((node, index) => {
           const column = index % fanoutColumns;
           const row = Math.floor(index / fanoutColumns);
+          const rowTop = nextBlockY + row * (fanoutGroupLabelHeight + fanoutGroupLabelGap + nodeHeight + fanoutGroupGap);
           positions[node.id] = {
             x: levelX[level] + column * (nodeWidth + nodeGap),
-            y: nextBlockY + row * (nodeHeight + nodeGap),
+            y: rowTop + fanoutGroupLabelHeight + fanoutGroupLabelGap,
           };
         });
       } else {
@@ -415,7 +441,7 @@ function graphLayout(nodes) {
     });
   }
 
-  return { nodeWidth, nodeHeight, sceneWidth, sceneHeight, positions };
+  return { nodeWidth, nodeHeight, sceneWidth, sceneHeight, positions, fanoutRowDecorations };
 }
 
 function updateTopMetrics() {
@@ -700,12 +726,14 @@ function renderRuns() {
             aria-label="${escapeAttr(`${run.pipeline?.name || "Untitled pipeline"} ${run.status || "pending"} run`)}"
           >
             <div class="runs-topline">
+              <span
+                class="runs-status-dot ${statusClass(run.status)}"
+                style="width:8px;height:8px"
+                aria-hidden="true"
+              ></span>
               <strong class="runs-pipeline">${escapeHtml(truncateRunName(run.pipeline?.name))}</strong>
-              <span class="runs-status-dot ${statusClass(run.status)}" aria-hidden="true"></span>
-              <span class="runs-time">${escapeHtml(formatRelativeTime(run.started_at || run.created_at))}</span>
             </div>
-            <div class="runs-subline">${escapeHtml(formatRunDuration(run))} · ${escapeHtml(`${getRunNodeIds(run).length} ${getRunNodeIds(run).length === 1 ? "node" : "nodes"}`)}</div>
-            ${renderProgress(run)}
+            <div class="runs-subline">${escapeHtml(formatRelativeTime(run.started_at || run.created_at))} · ${escapeHtml(formatRunDuration(run))} · ${escapeHtml(`${getRunNodeIds(run).length} ${getRunNodeIds(run).length === 1 ? "node" : "nodes"}`)}</div>
           </button>
         `).join("")}
       </section>
@@ -772,9 +800,7 @@ function renderGraph(pipelineNodes = null, nodeStatusMap = null) {
   const selectedColor = "#0969da";
   const nodeFill = "#ffffff";
   const nodeText = "#1f2328";
-  const badgeFill = "#f6f8fa";
-  const badgeStroke = "#d0d7de";
-  const badgeTextColor = "#656d76";
+  const highFaninThreshold = 8;
   const defaultViewBox = { x: 0, y: 0, width: layout.sceneWidth, height: layout.sceneHeight };
   const svg = document.createElementNS(ns, "svg");
   ensureGraphControlsStyle();
@@ -795,7 +821,7 @@ function renderGraph(pipelineNodes = null, nodeStatusMap = null) {
   container.appendChild(controls);
 
   const defs = document.createElementNS(ns, "defs");
-  const createMarker = (id, color) => {
+  const createMarker = (id, color, markerUnits = "strokeWidth") => {
     const marker = document.createElementNS(ns, "marker");
     marker.setAttribute("id", id);
     marker.setAttribute("viewBox", "0 0 10 10");
@@ -803,7 +829,7 @@ function renderGraph(pipelineNodes = null, nodeStatusMap = null) {
     marker.setAttribute("refY", "5");
     marker.setAttribute("markerWidth", "7");
     marker.setAttribute("markerHeight", "7");
-    marker.setAttribute("markerUnits", "strokeWidth");
+    marker.setAttribute("markerUnits", markerUnits);
     marker.setAttribute("orient", "auto");
     const arrow = document.createElementNS(ns, "path");
     arrow.setAttribute("d", "M 0 0 L 10 5 L 0 10 z");
@@ -827,6 +853,7 @@ function renderGraph(pipelineNodes = null, nodeStatusMap = null) {
   defs.appendChild(selectedShadow);
   defs.appendChild(createMarker("graph-arrow", edgeColor));
   defs.appendChild(createMarker("graph-arrow-cycle", edgeColor));
+  defs.appendChild(createMarker("graph-arrow-fanin", edgeColor, "userSpaceOnUse"));
   svg.appendChild(defs);
 
   const background = document.createElementNS(ns, "rect");
@@ -838,8 +865,11 @@ function renderGraph(pipelineNodes = null, nodeStatusMap = null) {
   svg.appendChild(background);
 
   const edgesLayer = document.createElementNS(ns, "g");
+  const fanoutDecorationsLayer = document.createElementNS(ns, "g");
+  fanoutDecorationsLayer.setAttribute("pointer-events", "none");
   const nodesLayer = document.createElementNS(ns, "g");
   svg.appendChild(edgesLayer);
+  svg.appendChild(fanoutDecorationsLayer);
   svg.appendChild(nodesLayer);
 
   const nodeRefs = {};
@@ -861,22 +891,55 @@ function renderGraph(pipelineNodes = null, nodeStatusMap = null) {
     svg.setAttribute("viewBox", `${nextViewBox.x} ${nextViewBox.y} ${nextViewBox.width} ${nextViewBox.height}`);
   }
 
+  function contentViewBox() {
+    const fallbackViewBox = {
+      x: defaultViewBox.x,
+      y: defaultViewBox.y,
+      width: defaultViewBox.width,
+      height: defaultViewBox.height,
+    };
+    if (!nodesLayer.childNodes.length) return fallbackViewBox;
+
+    let bounds;
+    try {
+      bounds = nodesLayer.getBBox();
+    } catch (_error) {
+      return fallbackViewBox;
+    }
+    if (![bounds.x, bounds.y, bounds.width, bounds.height].every(Number.isFinite)) return fallbackViewBox;
+
+    const padding = 16;
+    const fillRatio = 0.85;
+    const paddedWidth = Math.max(1, bounds.width + padding * 2);
+    const paddedHeight = Math.max(1, bounds.height + padding * 2);
+    const containerRect = container.getBoundingClientRect();
+    const containerAspect = containerRect.width > 0 && containerRect.height > 0
+      ? containerRect.width / containerRect.height
+      : paddedWidth / paddedHeight;
+
+    let width = paddedWidth / fillRatio;
+    let height = paddedHeight / fillRatio;
+    if (containerAspect > 0) {
+      const viewBoxAspect = width / height;
+      if (viewBoxAspect > containerAspect) {
+        height = width / containerAspect;
+      } else {
+        width = height * containerAspect;
+      }
+    }
+
+    const centerX = bounds.x + bounds.width / 2;
+    const centerY = bounds.y + bounds.height / 2;
+    return {
+      x: centerX - width / 2,
+      y: centerY - height / 2,
+      width,
+      height,
+    };
+  }
+
   function fitGraphView() {
-    const padding = 48;
-    const bounds = nodes.reduce((acc, node) => {
-      const position = graphViewState.positions[node.id] || layout.positions[node.id];
-      acc.minX = Math.min(acc.minX, position.x);
-      acc.minY = Math.min(acc.minY, position.y);
-      acc.maxX = Math.max(acc.maxX, position.x + layout.nodeWidth);
-      acc.maxY = Math.max(acc.maxY, position.y + layout.nodeHeight);
-      return acc;
-    }, { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity });
-    setSvgViewBox({
-      x: bounds.minX - padding,
-      y: bounds.minY - padding,
-      width: bounds.maxX - bounds.minX + padding * 2,
-      height: bounds.maxY - bounds.minY + padding * 2,
-    });
+    setSvgViewBox(contentViewBox());
   }
 
   function resetGraphZoom() {
@@ -916,8 +979,6 @@ function renderGraph(pipelineNodes = null, nodeStatusMap = null) {
     controls.appendChild(button);
   });
 
-  setSvgViewBox(graphViewState.viewBox || defaultViewBox);
-
   function scenePoint(event) {
     const rect = svg.getBoundingClientRect();
     const viewBox = currentViewBox();
@@ -949,17 +1010,55 @@ function renderGraph(pipelineNodes = null, nodeStatusMap = null) {
     };
   }
 
-  function forwardPath(fromId, toId) {
-    const from = nodeBounds(fromId);
-    const to = nodeBounds(toId);
-    const startX = from.x + from.width;
-    const startY = from.y + from.height / 2;
-    const endX = to.x;
-    const endY = to.y + to.height / 2;
+  function forwardCurve(startX, startY, endX, endY) {
     const direction = endX >= startX ? 1 : -1;
     const controlX = startX + direction * Math.max(52, Math.abs(endX - startX) * 0.5);
     const controlY = startY + (endY - startY) * 0.5;
     return `M ${startX} ${startY} Q ${controlX} ${controlY} ${endX} ${endY}`;
+  }
+
+  function forwardPath(fromId, toId) {
+    const from = nodeBounds(fromId);
+    const to = nodeBounds(toId);
+    return forwardCurve(
+      from.x + from.width,
+      from.y + from.height / 2,
+      to.x,
+      to.y + to.height / 2,
+    );
+  }
+
+  function highFaninAnchor(sourceIds) {
+    const sourceBounds = sourceIds
+      .map((sourceId) => graphViewState.positions[sourceId] ? nodeBounds(sourceId) : null)
+      .filter(Boolean);
+    if (!sourceBounds.length) return null;
+    const aggregate = sourceBounds.reduce((acc, bounds) => {
+      acc.minX = Math.min(acc.minX, bounds.x);
+      acc.minY = Math.min(acc.minY, bounds.y);
+      acc.maxX = Math.max(acc.maxX, bounds.x + bounds.width);
+      acc.maxY = Math.max(acc.maxY, bounds.y + bounds.height);
+      return acc;
+    }, { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity });
+    return {
+      x: (aggregate.minX + aggregate.maxX) / 2,
+      y: (aggregate.minY + aggregate.maxY) / 2,
+    };
+  }
+
+  function highFaninPath(sourceIds, toId) {
+    const anchor = highFaninAnchor(sourceIds);
+    if (!anchor) return "";
+    const to = nodeBounds(toId);
+    return forwardCurve(anchor.x, anchor.y, to.x, to.y + to.height / 2);
+  }
+
+  function highFaninLabelPosition(toId) {
+    const to = nodeBounds(toId);
+    return {
+      x: to.x + to.width / 2,
+      y: to.y - 8,
+    };
   }
 
   function cyclePath(fromId, toId) {
@@ -985,8 +1084,12 @@ function renderGraph(pipelineNodes = null, nodeStatusMap = null) {
 
   function updateEdges(changedNodeId = null) {
     edgeRefs.forEach((edge) => {
-      if (changedNodeId && edge.fromId !== changedNodeId && edge.toId !== changedNodeId) return;
-      edge.path.setAttribute("d", edge.kind === "cycle" ? cyclePath(edge.fromId, edge.toId) : forwardPath(edge.fromId, edge.toId));
+      const dependsOnChangedNode = !changedNodeId
+        || edge.toId === changedNodeId
+        || (Array.isArray(edge.sourceIds) && edge.sourceIds.includes(changedNodeId))
+        || edge.fromId === changedNodeId;
+      if (!dependsOnChangedNode) return;
+      edge.update();
     });
   }
 
@@ -1008,7 +1111,9 @@ function renderGraph(pipelineNodes = null, nodeStatusMap = null) {
     });
     edgeRefs.forEach((edge) => {
       const isDirectDependencyEdge = edge.kind === "dependency" && edge.toId === selectedNodeId;
-      edge.path.style.opacity = !hasSelection || isDirectDependencyEdge ? "1.0" : "0.3";
+      const opacity = !hasSelection || isDirectDependencyEdge ? "1.0" : "0.3";
+      edge.path.style.opacity = opacity;
+      if (edge.label) edge.label.style.opacity = opacity;
     });
   }
 
@@ -1016,6 +1121,41 @@ function renderGraph(pipelineNodes = null, nodeStatusMap = null) {
     const dependencies = Array.from(new Set(
       (Array.isArray(node.depends_on) ? node.depends_on : []).filter((dependency) => graphViewState.positions[dependency])
     ));
+    if (dependencies.length > highFaninThreshold) {
+      const edge = document.createElementNS(ns, "path");
+      edge.setAttribute("fill", "none");
+      edge.setAttribute("stroke", edgeColor);
+      edge.setAttribute("stroke-width", "4");
+      edge.setAttribute("stroke-linecap", "round");
+      edge.setAttribute("stroke-linejoin", "round");
+      edge.setAttribute("marker-end", "url(#graph-arrow-fanin)");
+      edgesLayer.appendChild(edge);
+
+      const label = document.createElementNS(ns, "text");
+      label.setAttribute("fill", "#656d76");
+      label.setAttribute("font-size", "9");
+      label.setAttribute("font-weight", "600");
+      label.setAttribute("text-anchor", "middle");
+      label.setAttribute("pointer-events", "none");
+      label.setAttribute("font-family", "JetBrains Mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace");
+      label.textContent = `${dependencies.length} inputs`;
+      edgesLayer.appendChild(label);
+
+      edgeRefs.push({
+        toId: node.id,
+        kind: "dependency",
+        path: edge,
+        label,
+        sourceIds: dependencies,
+        update: () => {
+          edge.setAttribute("d", highFaninPath(dependencies, node.id));
+          const position = highFaninLabelPosition(node.id);
+          label.setAttribute("x", String(position.x));
+          label.setAttribute("y", String(position.y));
+        },
+      });
+      return;
+    }
     for (const dependency of dependencies) {
       if (!graphViewState.positions[dependency] || !graphViewState.positions[node.id]) continue;
       const edge = document.createElementNS(ns, "path");
@@ -1026,7 +1166,16 @@ function renderGraph(pipelineNodes = null, nodeStatusMap = null) {
       edge.setAttribute("stroke-linejoin", "round");
       edge.setAttribute("marker-end", "url(#graph-arrow)");
       edgesLayer.appendChild(edge);
-      edgeRefs.push({ fromId: dependency, toId: node.id, kind: "dependency", path: edge });
+      edgeRefs.push({
+        fromId: dependency,
+        toId: node.id,
+        kind: "dependency",
+        path: edge,
+        sourceIds: [dependency],
+        update: () => {
+          edge.setAttribute("d", forwardPath(dependency, node.id));
+        },
+      });
     }
   });
 
@@ -1045,11 +1194,41 @@ function renderGraph(pipelineNodes = null, nodeStatusMap = null) {
       edge.setAttribute("stroke-linejoin", "round");
       edge.setAttribute("marker-end", "url(#graph-arrow-cycle)");
       edgesLayer.appendChild(edge);
-      edgeRefs.push({ fromId: node.id, toId: restartTarget, kind: "cycle", path: edge });
+      edgeRefs.push({
+        fromId: node.id,
+        toId: restartTarget,
+        kind: "cycle",
+        path: edge,
+        sourceIds: [node.id],
+        update: () => {
+          edge.setAttribute("d", cyclePath(node.id, restartTarget));
+        },
+      });
     }
   });
 
   updateEdges();
+
+  (layout.fanoutRowDecorations || []).forEach((decoration) => {
+    const separator = document.createElementNS(ns, "line");
+    separator.setAttribute("x1", String(decoration.x));
+    separator.setAttribute("x2", String(decoration.x + decoration.width));
+    separator.setAttribute("y1", String(decoration.separatorY));
+    separator.setAttribute("y2", String(decoration.separatorY));
+    separator.setAttribute("stroke", "#d0d7de");
+    separator.setAttribute("stroke-width", "1");
+    fanoutDecorationsLayer.appendChild(separator);
+
+    const label = document.createElementNS(ns, "text");
+    label.setAttribute("x", String(decoration.x));
+    label.setAttribute("y", String(decoration.labelY));
+    label.setAttribute("fill", "#656d76");
+    label.setAttribute("font-size", "8");
+    label.setAttribute("font-weight", "600");
+    label.setAttribute("font-family", "JetBrains Mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace");
+    label.textContent = decoration.label;
+    fanoutDecorationsLayer.appendChild(label);
+  });
 
   let dragState = null;
   let suppressClick = false;
@@ -1058,8 +1237,6 @@ function renderGraph(pipelineNodes = null, nodeStatusMap = null) {
     const result = nodeMap[node.id] || { status: "pending" };
     const status = result.status || "pending";
     const statusColor = graphStatusColor(status);
-    const badgeLabel = truncateGraphLabel(node.agent || "agent", 10);
-    const badgeWidth = Math.min(layout.nodeWidth - 20, Math.max(36, badgeLabel.length * 5 + 14));
     const group = document.createElementNS(ns, "g");
     group.dataset.nodeId = node.id;
     group.style.cursor = "grab";
@@ -1088,58 +1265,24 @@ function renderGraph(pipelineNodes = null, nodeStatusMap = null) {
     card.setAttribute("stroke-width", "2");
     group.appendChild(card);
 
+    const statusDot = document.createElementNS(ns, "circle");
+    statusDot.setAttribute("cx", "16");
+    statusDot.setAttribute("cy", String(layout.nodeHeight / 2));
+    statusDot.setAttribute("r", "4");
+    statusDot.setAttribute("fill", statusColor);
+    group.appendChild(statusDot);
+
     const title = document.createElementNS(ns, "text");
-    title.setAttribute("x", "10");
-    title.setAttribute("y", "17");
+    title.setAttribute("x", "28");
+    title.setAttribute("y", String(layout.nodeHeight / 2));
     title.setAttribute("fill", nodeText);
-    title.setAttribute("font-size", "10");
+    title.setAttribute("font-size", "12");
     title.setAttribute("font-weight", "600");
+    title.setAttribute("dominant-baseline", "middle");
     title.setAttribute("font-family", "JetBrains Mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace");
-    title.textContent = truncateGraphLabel(node.id, 12);
-    group.appendChild(title);
-
-    const statusText = document.createElementNS(ns, "text");
-    statusText.setAttribute("x", String(layout.nodeWidth - 10));
-    statusText.setAttribute("y", "17");
-    statusText.setAttribute("fill", nodeText);
-    statusText.setAttribute("font-size", "8");
-    statusText.setAttribute("font-weight", "600");
-    statusText.setAttribute("text-anchor", "end");
-    statusText.setAttribute("font-family", "JetBrains Mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace");
-    statusText.textContent = truncateGraphLabel(status.toUpperCase(), 8);
-    group.appendChild(statusText);
-
-    const subtitle = document.createElementNS(ns, "text");
-    subtitle.setAttribute("x", "10");
-    subtitle.setAttribute("y", "30");
-    subtitle.setAttribute("fill", nodeText);
-    subtitle.setAttribute("font-size", "8");
-    subtitle.setAttribute("font-family", "JetBrains Mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace");
-    subtitle.textContent = `Attempts ${(result.current_attempt || 0)}/${(node.retries || 0) + 1}`;
-    group.appendChild(subtitle);
-
-    const badge = document.createElementNS(ns, "rect");
-    badge.setAttribute("x", "10");
-    badge.setAttribute("y", "34");
-    badge.setAttribute("width", String(badgeWidth));
-    badge.setAttribute("height", "12");
-    badge.setAttribute("rx", "6");
-    badge.setAttribute("fill", badgeFill);
-    badge.setAttribute("stroke", badgeStroke);
-    badge.setAttribute("stroke-width", "1");
-    group.appendChild(badge);
-
-    const badgeText = document.createElementNS(ns, "text");
-    badgeText.setAttribute("x", String(10 + badgeWidth / 2));
-    badgeText.setAttribute("y", "43");
-    badgeText.setAttribute("fill", badgeTextColor);
-    badgeText.setAttribute("font-size", "8");
-    badgeText.setAttribute("font-weight", "600");
-    badgeText.setAttribute("text-anchor", "middle");
-    badgeText.setAttribute("font-family", "JetBrains Mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace");
-    badgeText.textContent = badgeLabel;
-    group.appendChild(badgeText);
+    title.textContent = truncateGraphLabel(graphNodeShortName(node.id), 14);
     group.appendChild(selection);
+    group.appendChild(title);
 
     nodeRefs[node.id] = group;
     updateNodePosition(node.id);
@@ -1184,6 +1327,9 @@ function renderGraph(pipelineNodes = null, nodeStatusMap = null) {
 
     nodesLayer.appendChild(group);
   });
+
+  Object.assign(defaultViewBox, contentViewBox());
+  setSvgViewBox(graphViewState.viewBox || defaultViewBox);
 
   applySelectionOpacity(state.selectedNodeId);
 
@@ -1476,6 +1622,79 @@ function ensureDetailEnhancements() {
         color: #8a8f98;
         font-size: 0.76rem;
         text-align: center;
+      }
+
+      .detail-panel {
+        margin: 0 0 1rem;
+        padding: 0;
+        border: 0;
+        border-radius: 0;
+        background: transparent;
+        box-shadow: none;
+      }
+
+      .detail-tablist {
+        display: flex;
+        flex-wrap: nowrap;
+        align-items: flex-end;
+        gap: 8px;
+        margin: 0 0 0.75rem;
+        overflow-x: auto;
+        white-space: nowrap;
+      }
+
+      .detail-tab {
+        flex: 0 0 auto;
+        appearance: none;
+        padding: 0 0 8px;
+        border: 0;
+        border-radius: 0;
+        background: transparent;
+        color: #656d76;
+        font-size: 0.84rem;
+        font-weight: 400;
+        line-height: 1.4;
+        cursor: pointer;
+      }
+
+      .detail-tab[aria-selected="true"] {
+        color: #0969da;
+        font-weight: 700;
+        border-bottom: 2px solid #0969da;
+      }
+
+      .detail-tab[aria-selected="false"] {
+        color: #656d76;
+        font-weight: 400;
+        border-bottom: none;
+      }
+
+      .detail-tab:focus-visible {
+        outline: 2px solid rgba(9, 105, 218, 0.28);
+        outline-offset: 2px;
+      }
+
+      .detail-section {
+        margin: 0;
+        padding: 0;
+        border: 0;
+        border-top: 1px solid #e5e7eb;
+        border-radius: 0;
+        background: transparent;
+        box-shadow: none;
+      }
+
+      .detail-section > summary {
+        padding: 0.85rem 0;
+        color: inherit;
+        cursor: pointer;
+        font-size: 0.84rem;
+        font-weight: 600;
+        line-height: 1.5;
+      }
+
+      .detail-section-body {
+        padding: 0 0 0.9rem;
       }
     `;
     document.head.appendChild(style);
@@ -2122,21 +2341,20 @@ async function renderDetail() {
   const successChecksText = successChecks.length
     ? escapeHtml(successChecks.join("\n"))
     : "no success criteria";
-  const detailSectionSummaryStyle = "cursor:pointer;font-size:0.84rem;font-weight:600;line-height:1.5;";
 
   detail.innerHTML = `
     ${detailSummary}
-    <div class="trace-item" style="margin-top:0">
-      <div role="tablist" aria-label="Node detail views" style="display:flex;flex-wrap:wrap;gap:0.6rem;margin-bottom:0.9rem">
+    <div class="detail-panel">
+      <div class="detail-tablist" role="tablist" aria-label="Node detail views">
         ${detailTabs.map((tab) => {
           const isActive = tab.id === activeTab;
           return `
             <button
+              class="detail-tab"
               type="button"
               role="tab"
               data-detail-tab="${tab.id}"
               aria-selected="${isActive ? "true" : "false"}"
-              style="padding:0.5rem 0.9rem;border-radius:999px;border:1px solid ${isActive ? "rgba(56, 189, 248, 0.72)" : "rgba(148, 163, 184, 0.24)"};background:${isActive ? "rgba(56, 189, 248, 0.18)" : "rgba(15, 23, 42, 0.5)"};color:${isActive ? "#e0f2fe" : "var(--muted)"};font-weight:${isActive ? "700" : "600"};cursor:pointer"
             >${tab.label}</button>
           `;
         }).join("")}
@@ -2145,21 +2363,21 @@ async function renderDetail() {
         ${tabPanelContent}
       </div>
     </div>
-    <details class="trace-item" open>
-      <summary style="${detailSectionSummaryStyle}">Attempts</summary>
-      <div style="margin-top:0.75rem">
+    <details class="trace-item detail-section" open>
+      <summary>Attempts</summary>
+      <div class="detail-section-body">
         <div class="summary-grid">${attemptRows || '<div class="small">No attempts yet.</div>'}</div>
       </div>
     </details>
-    <details class="trace-item"${successChecks.length ? " open" : ""}>
-      <summary style="${detailSectionSummaryStyle}">Success checks</summary>
-      <div style="margin-top:0.75rem">
+    <details class="trace-item detail-section"${successChecks.length ? " open" : ""}>
+      <summary>Success checks</summary>
+      <div class="detail-section-body">
         <div class="output-box" style="margin-top:0">${successChecksText}</div>
       </div>
     </details>
-    <details class="trace-item">
-      <summary style="${detailSectionSummaryStyle}">Lifecycle Events</summary>
-      <div style="margin-top:0.75rem">
+    <details class="trace-item detail-section">
+      <summary>Lifecycle Events</summary>
+      <div class="detail-section-body">
         ${lifecycleEvents.map((event) => renderLifecycleEvent(event)).join("") || '<div class="small">No node-specific lifecycle events yet.</div>'}
       </div>
     </details>
