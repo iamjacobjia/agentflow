@@ -515,6 +515,9 @@ class Orchestrator:
                         fanout_group=node.fanout_group, fanout_member=node.fanout_member,
                         on_failure_restart=node.on_failure_restart,
                         fanout_dependencies=getattr(node, 'fanout_dependencies', {}),
+                        executable=node.executable,
+                        description=node.description,
+                        repo_instructions_mode=node.repo_instructions_mode,
                     )
                 except Exception as exc:
                     await self._publish(run_id, "node_trace", node_id=node_id,
