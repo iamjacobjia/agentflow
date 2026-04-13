@@ -130,6 +130,31 @@ with Graph("campaign", scratchboard=True) as g:
     shards = fanout(codex(task_id="fuzz", prompt="..."), 128)
 ```
 
+## Tuned Agent Evolution
+
+Use a completed Codex run as training data to create a reusable tuned agent:
+
+```python
+from agentflow import Graph, codex, evolve
+
+with Graph("improve-codex", working_dir=".") as g:
+    source = codex(task_id="plan", prompt="Inspect this repo and summarize the main risks.")
+    tuned = evolve(source, target="codex", optimizer="codex")
+
+print(g.to_json())
+```
+
+Run order:
+
+```bash
+agentflow run pipeline.py
+agentflow evolve <run_id> -n <node_id> --target codex --profile codex --optimizer codex
+agentflow tuned-agents
+agentflow tuned-agent codex_tuned --output json
+```
+
+Successful evolutions are stored under `.agentflow/tuned_agents/<name>/versions/<version>/` with copied traces, the cloned repo, and version metadata. Tuned agents currently resolve only on local targets.
+
 ## Examples
 
 | Example | What it does |
@@ -151,6 +176,9 @@ with Graph("campaign", scratchboard=True) as g:
 ```bash
 agentflow run pipeline.py           # run a pipeline
 agentflow run pipeline.py --output summary
+agentflow evolve <run_id> -n plan   # evolve a tuned agent from prior Codex traces
+agentflow tuned-agents              # list locally registered tuned agents
+agentflow tuned-agent codex_tuned   # inspect one tuned agent
 agentflow inspect pipeline.py       # show expanded graph
 agentflow validate pipeline.py      # check without running
 agentflow templates                  # list starter templates

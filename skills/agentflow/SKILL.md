@@ -26,7 +26,7 @@ Run: `agentflow run pipeline.py`
 ## Imports
 
 ```python
-from agentflow import Graph, codex, claude, kimi       # agents
+from agentflow import Graph, agent, codex, claude, kimi, evolve
 from agentflow import fanout, merge                    # parallel shards
 from agentflow import shell, python_node, sync         # utility nodes
 ```
@@ -216,6 +216,50 @@ deploy = sync(task_id="deploy", mode="full", target={
 ```
 
 Mix with agent nodes freely: `build >> codex(...) >> deploy`
+
+## Tuned Agents
+
+Use `evolve(...)` when you already have one or more completed Codex nodes and want AgentFlow to turn their traces into a reusable tuned agent:
+
+```python
+from agentflow import Graph, codex, evolve
+
+with Graph("improve-codex", working_dir=".") as g:
+    source = codex(task_id="plan", prompt="Inspect the repository and summarize the main problems.")
+    tuned = evolve(source, target="codex", optimizer="codex")
+```
+
+What this does:
+
+- Collects `trace.jsonl` from the selected Codex nodes
+- Loads `agent_tuner/<profile>.yaml` from the pipeline `working_dir`
+- Clones the target repo, lets the optimizer agent patch it, then runs build/test/smoke
+- Registers the resulting version under `.agentflow/tuned_agents/<name>/versions/<version>/`
+
+Typical CLI flow after a completed run:
+
+```bash
+agentflow runs
+agentflow evolve <run_id> -n <node_id> --target codex --profile codex --optimizer codex
+agentflow tuned-agents
+agentflow tuned-agent codex_tuned --output json
+```
+
+To reuse the generated tuned agent in a later pipeline, use a custom agent name:
+
+```python
+from agentflow import Graph, agent
+
+with Graph("use-tuned", working_dir=".") as g:
+    agent("codex_tuned", task_id="verify", prompt="Reply with exactly READY.")
+```
+
+Important constraints:
+
+- The pipeline `working_dir` must be the workspace that contains `agent_tuner/` and `.agentflow/`
+- The source run must include Codex trace artifacts
+- Tuned agents currently require a local target
+- If Codex's own sandbox cannot start in an externally sandboxed/containerized environment, pass `env={"AGENTFLOW_CODEX_SANDBOX_MODE": "danger-full-access"}` on the source node or in the tuner profile `env:` block
 
 ## Scratchboard
 

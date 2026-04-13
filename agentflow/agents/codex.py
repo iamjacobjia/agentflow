@@ -9,6 +9,8 @@ from agentflow.specs import NodeSpec, ProviderConfig, RepoInstructionsMode, Tool
 
 
 class CodexAdapter(AgentAdapter):
+    _SUPPORTED_SANDBOX_MODES = {"read-only", "workspace-write", "danger-full-access"}
+
     def _format_toml_value(self, value: object) -> str:
         import json
 
@@ -23,12 +25,11 @@ class CodexAdapter(AgentAdapter):
             return "{" + items + "}"
         return json.dumps(str(value), ensure_ascii=False)
 
-    def _render_config(self, node: NodeSpec, provider: ProviderConfig | None) -> str:
+    def _render_config(self, node: NodeSpec, provider: ProviderConfig | None, sandbox_mode: str) -> str:
         lines: list[str] = []
         if node.model:
             lines.append(f"model = {self._format_toml_value(node.model)}")
         lines.append(f"approval_policy = {self._format_toml_value('never')}")
-        sandbox_mode = "read-only" if node.tools == ToolAccess.READ_ONLY else "workspace-write"
         lines.append(f"sandbox_mode = {self._format_toml_value(sandbox_mode)}")
         if provider and (provider.base_url or provider.api_key_env or provider.wire_api):
             lines.append("")
@@ -64,10 +65,22 @@ class CodexAdapter(AgentAdapter):
                         lines.append(f"http_headers = {self._format_toml_value(mcp.headers)}")
         return "\n".join(lines) + "\n"
 
+    def _resolve_sandbox_mode(self, node: NodeSpec, env: dict[str, str]) -> str:
+        override = (env.pop("AGENTFLOW_CODEX_SANDBOX_MODE", "") or "").strip()
+        if not override:
+            return "read-only" if node.tools == ToolAccess.READ_ONLY else "workspace-write"
+        if override not in self._SUPPORTED_SANDBOX_MODES:
+            raise ValueError(
+                "AGENTFLOW_CODEX_SANDBOX_MODE must be one of: "
+                + ", ".join(sorted(self._SUPPORTED_SANDBOX_MODES))
+            )
+        return override
+
     def prepare(self, node: NodeSpec, prompt: str, paths: ExecutionPaths) -> PreparedExecution:
         provider = self.provider_config(node.provider, node.agent)
         executable = node.executable or "codex"
-        sandbox = "read-only" if node.tools == ToolAccess.READ_ONLY else "workspace-write"
+        env = merge_env_layers(getattr(provider, "env", None), node.env)
+        sandbox = self._resolve_sandbox_mode(node, env)
         repo_instructions_ignored = node.repo_instructions_mode == RepoInstructionsMode.IGNORE
         command = [
             executable,
@@ -91,11 +104,14 @@ class CodexAdapter(AgentAdapter):
         command.extend(node.extra_args)
         command.append(prompt)
 
-        env = merge_env_layers(getattr(provider, "env", None), node.env)
         runtime_files: dict[str, str] = {}
         if provider or node.mcps or repo_instructions_ignored:
             codex_home = str(Path(paths.target_runtime_dir) / "codex_home")
-            runtime_files[self.relative_runtime_file("codex_home", "config.toml")] = self._render_config(node, provider)
+            runtime_files[self.relative_runtime_file("codex_home", "config.toml")] = self._render_config(
+                node,
+                provider,
+                sandbox,
+            )
             env["CODEX_HOME"] = codex_home
             env["HOME"] = codex_home
         cwd = paths.target_workdir

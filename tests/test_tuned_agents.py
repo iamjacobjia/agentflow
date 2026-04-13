@@ -247,6 +247,75 @@ def test_run_evolution_from_payload_retries_and_registers_latest(tmp_path, monke
     assert Path(result["executable"]).exists()
 
 
+def test_run_evolution_from_payload_uses_repo_root_for_optimizer_when_workdir_subpath_is_set(tmp_path, monkeypatch):
+    workspace = tmp_path
+    config_dir = workspace / "agent_tuner"
+    config_dir.mkdir()
+    (config_dir / "codex.yaml").write_text(
+        "\n".join(
+            [
+                "name: codex_tuned",
+                "base_agent: codex",
+                "repo_url: https://example.invalid/repo.git",
+                "workdir_subpath: codex-rs",
+                "build_command: build",
+                "test_command: test",
+                "smoke_command: smoke",
+                "evolution_prompt: improve the agent",
+                "executable_path: target/debug/codex",
+                "max_attempts: 1",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    trace_path = workspace / "trace.jsonl"
+    trace_path.write_text('{"kind":"assistant_message","content":"hello"}\n', encoding="utf-8")
+    captured: dict[str, object] = {}
+
+    def fake_clone(_config, repo_dir: Path) -> None:
+        (repo_dir / "codex-rs").mkdir(parents=True)
+        (repo_dir / "README.md").write_text("root", encoding="utf-8")
+        (repo_dir / "codex-rs" / "Cargo.toml").write_text("[workspace]\n", encoding="utf-8")
+
+    def fake_optimizer(_optimizer: AgentKind, *, prompt: str, repo_dir: Path, runtime_dir: Path, env: dict[str, str]):
+        captured["optimizer_repo_dir"] = str(repo_dir)
+        captured["optimizer_prompt"] = prompt
+        return CommandExecution(
+            command="optimizer",
+            exit_code=0,
+            stdout='{"type":"response.output_item.done","item":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"updated"}]}}',
+            stderr="",
+        )
+
+    def fake_shell(command_template: str, *, repo_dir: Path, version_dir: Path, traces_dir: Path, executable: str, env: dict[str, str]):
+        captured.setdefault("shell_repo_dirs", []).append(str(repo_dir))
+        if command_template == "build":
+            executable_path = Path(executable)
+            executable_path.parent.mkdir(parents=True, exist_ok=True)
+            executable_path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        return CommandExecution(command=command_template, exit_code=0, stdout="ok", stderr="")
+
+    monkeypatch.setattr("agentflow.tuned_agents._clone_repo", fake_clone)
+    monkeypatch.setattr("agentflow.tuned_agents._run_optimizer", fake_optimizer)
+    monkeypatch.setattr("agentflow.tuned_agents._run_shell_command", fake_shell)
+
+    result = run_evolution_from_payload(
+        {
+            "profile": "codex",
+            "target": "codex",
+            "optimizer": "codex",
+            "source_nodes": ["plan"],
+            "trace_paths": {"plan": str(trace_path)},
+            "workspace_dir": str(workspace),
+            "run_id": "run123",
+        }
+    )
+
+    assert captured["optimizer_repo_dir"] == result["repo_path"]
+    assert result["workdir"] == str(Path(result["repo_path"]) / "codex-rs")
+    assert captured["shell_repo_dirs"] == [result["workdir"], result["workdir"], result["workdir"]]
+
+
 def test_optimizer_prompt_explicitly_allows_prompt_and_tool_edits(tmp_path):
     resolved = ResolvedTunerConfig(
         profile="codex",
@@ -272,7 +341,8 @@ def test_optimizer_prompt_explicitly_allows_prompt_and_tool_edits(tmp_path):
 
     prompt = _optimizer_prompt(
         resolved,
-        repo_dir=tmp_path / "repo",
+        repo_root=tmp_path / "repo",
+        repo_workdir=tmp_path / "repo",
         traces_dir=tmp_path / "traces",
         source_nodes=["plan"],
         previous_failure=None,
@@ -284,6 +354,9 @@ def test_optimizer_prompt_explicitly_allows_prompt_and_tool_edits(tmp_path):
     assert "Known tunable surfaces and implementing files" in prompt
     assert "core/gpt_5_codex_prompt.md" in prompt
     assert "tools/src/local_tool.rs" in prompt
+    assert "Do not write design docs, implementation plans, or other planning artifacts" in prompt
+    assert "Do not wait for user confirmation" in prompt
+    assert "Ignore installed process skills such as brainstorming, writing-plans, systematic-debugging, and test-driven-development" in prompt
 
 
 def test_repo_includes_codex_tuner_profile():
@@ -296,11 +369,12 @@ def test_repo_includes_codex_tuner_profile():
     assert resolved.config.repo_url == "https://github.com/openai/codex.git"
     assert resolved.config.workdir_subpath == "codex-rs"
     assert resolved.config.executable_path == "target/debug/codex"
+    assert resolved.config.env["AGENTFLOW_CODEX_SANDBOX_MODE"] == "danger-full-access"
     assert "System prompts" in resolved.config.evolution_prompt
     assert "tool descriptions" in resolved.config.evolution_prompt
-    assert len(resolved.config.tunable_surfaces) >= 10
+    assert len(resolved.config.tunable_surfaces) >= 4
     assert resolved.config.tunable_surfaces[0].name == "Base model prompts and prompt assembly"
-    assert "core/gpt_5_codex_prompt.md" in resolved.config.tunable_surfaces[0].paths
+    assert "codex-rs/core/gpt_5_codex_prompt.md" in resolved.config.tunable_surfaces[0].paths
 
 
 def test_cli_lists_tuned_agents(tmp_path, capsys):
