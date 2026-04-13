@@ -516,6 +516,224 @@ def _build_run_summary(record: object, run_dir: Path | str | None = None) -> dic
     return summary
 
 
+_STATUS_INACTIVE_NODE_STATUSES = {"pending", "queued", "ready"}
+_STATUS_ACTIVE_NODE_STATUSES = {"running", "retrying", "cancelling"}
+
+
+def _normalize_event_payload(event: object) -> dict[str, object]:
+    if isinstance(event, dict):
+        payload = dict(event)
+    else:
+        model_dump = getattr(event, "model_dump", None)
+        if callable(model_dump):
+            payload = model_dump(mode="json")
+        else:
+            payload = {
+                "timestamp": getattr(event, "timestamp", None),
+                "run_id": getattr(event, "run_id", None),
+                "type": getattr(event, "type", None),
+                "node_id": getattr(event, "node_id", None),
+                "data": getattr(event, "data", None),
+            }
+    if not isinstance(payload, dict):
+        return {}
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        payload["data"] = {}
+    return payload
+
+
+def _event_data_summary(data: object) -> str | None:
+    if not isinstance(data, dict):
+        return None
+    pieces: list[str] = []
+    if data.get("status") is not None:
+        pieces.append(f"status={data['status']}")
+    if data.get("attempt") is not None:
+        pieces.append(f"attempt={data['attempt']}")
+    if data.get("round_number") is not None:
+        pieces.append(f"round={data['round_number']}")
+    if data.get("total_rounds") is not None:
+        pieces.append(f"of={data['total_rounds']}")
+    if data.get("child_run_id") is not None:
+        pieces.append(f"child={data['child_run_id']}")
+    if data.get("reason") is not None:
+        pieces.append(f"reason={data['reason']}")
+    if data.get("error") is not None:
+        pieces.append(f"error={data['error']}")
+    return " ".join(pieces) if pieces else None
+
+
+def _render_status_event(event_payload: dict[str, object]) -> str:
+    timestamp = event_payload.get("timestamp")
+    event_type = event_payload.get("type")
+    node_id = event_payload.get("node_id")
+    parts: list[str] = []
+    if timestamp:
+        parts.append(str(timestamp))
+    if event_type:
+        parts.append(str(event_type))
+    if node_id:
+        parts.append(f"node={node_id}")
+    detail = _event_data_summary(event_payload.get("data"))
+    if detail:
+        parts.append(detail)
+    return " ".join(parts)
+
+
+def _build_status_progress(record: object) -> dict[str, object]:
+    nodes: dict[str, object] = getattr(record, "nodes", {}) or {}
+    pipeline_nodes = _pipeline_node_map(record)
+    node_ids = list(pipeline_nodes) if pipeline_nodes else list(nodes)
+    total_nodes = len(node_ids)
+    status_counts: dict[str, int] = {}
+    progressed_nodes = 0
+    active_nodes: list[dict[str, object]] = []
+
+    for node_id in node_ids:
+        node = nodes.get(node_id)
+        status = _status_value(getattr(node, "status", "pending")).lower()
+        status_counts[status] = status_counts.get(status, 0) + 1
+        if status not in _STATUS_INACTIVE_NODE_STATUSES:
+            progressed_nodes += 1
+        if status in _STATUS_ACTIVE_NODE_STATUSES:
+            entry: dict[str, object] = {"id": node_id, "status": status}
+            attempt = _node_attempt_count(node) if node is not None else 0
+            if attempt:
+                entry["attempt"] = attempt
+            active_nodes.append(entry)
+
+    progress_percent = 0.0
+    if total_nodes:
+        progress_percent = max(0.0, min(100.0, (progressed_nodes / total_nodes) * 100))
+
+    return {
+        "total_nodes": total_nodes,
+        "progressed_nodes": progressed_nodes,
+        "active_nodes": active_nodes,
+        "status_counts": status_counts,
+        "progress_percent": progress_percent,
+    }
+
+
+def _build_status_optimization(record: object) -> dict[str, object] | None:
+    payload: dict[str, object] = {}
+    parent_run_id = getattr(record, "optimization_parent_run_id", None)
+    if parent_run_id:
+        payload["parent_run_id"] = parent_run_id
+    round_number = getattr(record, "optimization_round", None)
+    if round_number:
+        payload["round"] = round_number
+    session = getattr(record, "optimization_session", None)
+    if isinstance(session, dict) and session:
+        payload["session"] = session
+    return payload or None
+
+
+def _build_status_summary(
+    record: object,
+    events: list[object],
+    *,
+    run_dir: Path | str | None = None,
+) -> dict[str, object]:
+    summary = _build_run_summary(record, run_dir=run_dir)
+    normalized_events = [_normalize_event_payload(event) for event in events]
+    summary["events"] = normalized_events
+    summary["recent_events"] = normalized_events[-5:]
+    summary["progress"] = _build_status_progress(record)
+    optimization = _build_status_optimization(record)
+    if optimization is not None:
+        summary["optimization"] = optimization
+    return summary
+
+
+def _render_status_optimization(optimization: dict[str, object]) -> str | None:
+    session = optimization.get("session")
+    pieces: list[str] = []
+    if isinstance(session, dict):
+        kind = session.get("kind")
+        if kind:
+            pieces.append(str(kind))
+        optimizer = session.get("optimizer")
+        if optimizer:
+            pieces.append(f"optimizer={optimizer}")
+        current_round = session.get("current_round")
+        total_rounds = session.get("total_rounds")
+        if current_round and total_rounds:
+            pieces.append(f"round {current_round}/{total_rounds}")
+        elif current_round:
+            pieces.append(f"round {current_round}")
+        child_run_ids = session.get("child_run_ids")
+        if isinstance(child_run_ids, list):
+            pieces.append(f"child_runs={len(child_run_ids)}")
+    if "round" in optimization and not any(piece.startswith("round ") for piece in pieces):
+        pieces.append(f"round {optimization['round']}")
+    if optimization.get("parent_run_id"):
+        pieces.append(f"parent={optimization['parent_run_id']}")
+    if not pieces:
+        return None
+    return f"Optimization: {' '.join(pieces)}"
+
+
+def _render_status_summary(
+    record: object,
+    events: list[object],
+    *,
+    run_dir: Path | str | None = None,
+) -> str:
+    summary = _build_status_summary(record, events, run_dir=run_dir)
+    lines = [f"Run {summary['id']}: {summary['status']}"]
+    pipeline = summary.get("pipeline")
+    if isinstance(pipeline, dict) and pipeline.get("name"):
+        lines.append(f"Pipeline: {pipeline['name']}")
+    duration = summary.get("duration")
+    if duration is not None:
+        lines.append(f"Duration: {duration}")
+    started_at = summary.get("started_at")
+    if started_at:
+        lines.append(f"Started: {started_at}")
+    run_dir_value = summary.get("run_dir")
+    if run_dir_value is not None:
+        lines.append(f"Run dir: {run_dir_value}")
+    optimization = summary.get("optimization")
+    if isinstance(optimization, dict):
+        rendered = _render_status_optimization(optimization)
+        if rendered:
+            lines.append(rendered)
+
+    progress = summary.get("progress")
+    if isinstance(progress, dict):
+        total_nodes = progress.get("total_nodes", 0)
+        progressed_nodes = progress.get("progressed_nodes", 0)
+        active_nodes = progress.get("active_nodes", [])
+        if total_nodes:
+            lines.append(f"Progress: {progressed_nodes}/{total_nodes} nodes, active {len(active_nodes)}")
+        if isinstance(active_nodes, list) and active_nodes:
+            active_entries: list[str] = []
+            for node in active_nodes:
+                node_id = node.get("id")
+                status = node.get("status")
+                if not node_id or not status:
+                    continue
+                rendered = f"{node_id} ({status}"
+                attempt = node.get("attempt")
+                if attempt:
+                    rendered += f", attempt {attempt}"
+                rendered += ")"
+                active_entries.append(rendered)
+            if active_entries:
+                lines.append(f"Active: {', '.join(active_entries)}")
+
+    recent_events = summary.get("recent_events")
+    if isinstance(recent_events, list) and recent_events:
+        lines.append("Recent events:")
+        for event_payload in recent_events:
+            if not isinstance(event_payload, dict):
+                continue
+            lines.append(f"- {_render_status_event(event_payload)}")
+    return "\n".join(lines)
+
+
 def _render_run_summary(record: object, run_dir: Path | str | None = None) -> str:
     summary = _build_run_summary(record, run_dir=run_dir)
     lines = [f"Run {summary['id']}: {summary['status']}"]
@@ -581,6 +799,27 @@ def _echo_run_result(record: object, *, output: RunOutputFormat, run_dir: Path |
         typer.echo(json.dumps(_build_run_summary(record, run_dir=run_dir), indent=2))
         return
     typer.echo(json.dumps(record.model_dump(mode="json"), indent=2))
+
+
+def _echo_status_result(
+    record: object,
+    events: list[object],
+    *,
+    output: RunOutputFormat,
+    run_dir: Path | str | None = None,
+) -> None:
+    resolved_output = _resolve_run_output(output)
+    if resolved_output == RunOutputFormat.SUMMARY:
+        typer.echo(_render_status_summary(record, events, run_dir=run_dir))
+        return
+    if resolved_output == RunOutputFormat.JSON_SUMMARY:
+        typer.echo(json.dumps(_build_status_summary(record, events, run_dir=run_dir), indent=2))
+        return
+    model_dump = getattr(record, "model_dump", None)
+    if callable(model_dump):
+        typer.echo(json.dumps(model_dump(mode="json"), indent=2))
+        return
+    typer.echo(json.dumps(_build_run_summary(record, run_dir=run_dir), indent=2))
 
 
 def _run_dir_for_record(store: object | None, run_id: str) -> Path | str | None:
@@ -2244,6 +2483,25 @@ def show(
     store = _build_store(runs_dir)
     record = _get_run_or_exit(store, run_id, runs_dir=runs_dir)
     _echo_run_result(record, output=output, run_dir=_run_dir_for_record(store, run_id))
+
+
+@app.command()
+def status(
+    run_id: str,
+    runs_dir: str = typer.Option(".agentflow/runs", envvar="AGENTFLOW_RUNS_DIR"),
+    output: RunOutputFormat = typer.Option(
+        RunOutputFormat.AUTO,
+        "--output",
+        help="Result output format. Defaults to `summary` on a terminal and `json` otherwise.",
+    ),
+) -> None:
+    store = _build_store(runs_dir)
+    record = _get_run_or_exit(store, run_id, runs_dir=runs_dir)
+    events = []
+    get_events = getattr(store, "get_events", None)
+    if callable(get_events):
+        events = get_events(run_id)
+    _echo_status_result(record, events, output=output, run_dir=_run_dir_for_record(store, run_id))
 
 
 @app.command()
