@@ -2848,6 +2848,96 @@ def test_run_uses_runtime_env_vars(monkeypatch):
     assert captured["wait_timeout"] is None
 
 
+def test_run_detach_submits_without_waiting(monkeypatch):
+    captured: dict[str, object] = {}
+    fake_pipeline = SimpleNamespace(model_dump=lambda mode="json": {"name": "detached", "nodes": []})
+
+    def fake_load_pipeline(*args, **kwargs):
+        captured["load_args"] = args
+        return fake_pipeline
+
+    def fake_ensure_daemon(*args, **kwargs):
+        captured["ensure_args"] = args
+        captured["ensure_kwargs"] = kwargs
+        return "http://daemon.test"
+
+    def fake_submit(pipeline: object, base_url: str):
+        captured["submitted_pipeline"] = pipeline
+        captured["submitted_base_url"] = base_url
+        return SimpleNamespace(
+            id="run-detached",
+            status=SimpleNamespace(value="queued"),
+            pipeline=SimpleNamespace(name="detached"),
+            nodes={},
+            model_dump=lambda mode="json": {"id": "run-detached", "status": "queued"},
+        )
+
+    monkeypatch.setattr(agentflow.cli, "_load_pipeline_with_optional_smoke_preflight", fake_load_pipeline)
+    monkeypatch.setattr(
+        agentflow.cli,
+        "_build_runtime",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("runtime should not build in detach mode")),
+    )
+    monkeypatch.setattr(agentflow.cli, "_ensure_daemon", fake_ensure_daemon)
+    monkeypatch.setattr(agentflow.cli, "_submit_detached_run", fake_submit)
+
+    result = runner.invoke(app, ["run", "pipeline.py", "-d", "--output", "summary"])
+
+    assert result.exit_code == 0
+    assert "Run run-detached: queued" in result.stdout
+    assert "completed" not in result.stdout
+    assert captured["submitted_pipeline"] is fake_pipeline
+    assert captured["submitted_base_url"] == "http://daemon.test"
+
+
+def test_run_detach_uses_daemon_env_overrides(monkeypatch, tmp_path):
+    captured: dict[str, object] = {}
+    fake_pipeline = SimpleNamespace(model_dump=lambda mode="json": {"name": "env-detach", "nodes": []})
+    metadata_path = tmp_path / "daemon.json"
+    runs_dir = tmp_path / "runs"
+
+    monkeypatch.setenv("AGENTFLOW_DAEMON_METADATA_PATH", str(metadata_path))
+    monkeypatch.setenv("AGENTFLOW_DAEMON_HOST", "daemon-host")
+    monkeypatch.setenv("AGENTFLOW_DAEMON_PORT", "8123")
+
+    monkeypatch.setattr(agentflow.cli, "_load_pipeline_with_optional_smoke_preflight", lambda *args, **kwargs: fake_pipeline)
+    monkeypatch.setattr(
+        agentflow.cli,
+        "_build_runtime",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("runtime should not build in detach mode")),
+    )
+
+    def fake_ensure_daemon(runs_dir_value: str, max_concurrent_runs: int, *, host: str, port: int, metadata_path: Path):
+        captured["runs_dir"] = runs_dir_value
+        captured["max_concurrent_runs"] = max_concurrent_runs
+        captured["host"] = host
+        captured["port"] = port
+        captured["metadata_path"] = metadata_path
+        return f"http://{host}:{port}"
+
+    def fake_submit(pipeline: object, base_url: str):
+        captured["submitted_base_url"] = base_url
+        return SimpleNamespace(
+            id="run-detached-env",
+            status=SimpleNamespace(value="running"),
+            pipeline=SimpleNamespace(name="env-detach"),
+            nodes={},
+            model_dump=lambda mode="json": {"id": "run-detached-env", "status": "running"},
+        )
+
+    monkeypatch.setattr(agentflow.cli, "_ensure_daemon", fake_ensure_daemon)
+    monkeypatch.setattr(agentflow.cli, "_submit_detached_run", fake_submit)
+
+    result = runner.invoke(app, ["run", "pipeline.py", "-d", "--runs-dir", str(runs_dir), "--output", "summary"])
+
+    assert result.exit_code == 0
+    assert captured["runs_dir"] == str(runs_dir)
+    assert captured["host"] == "daemon-host"
+    assert captured["port"] == 8123
+    assert captured["metadata_path"] == metadata_path
+    assert captured["submitted_base_url"] == "http://daemon-host:8123"
+
+
 def test_run_defaults_to_summary_on_tty(monkeypatch):
     class FakeOrchestrator:
         async def submit(self, pipeline: object):

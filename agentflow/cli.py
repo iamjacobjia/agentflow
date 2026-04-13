@@ -5,6 +5,7 @@ import os
 import json
 import subprocess
 import sys
+import time
 from dataclasses import dataclass, replace
 from datetime import datetime
 try:
@@ -16,6 +17,7 @@ except ImportError:  # pragma: no cover - Python < 3.11
         pass
 from pathlib import Path
 
+import httpx
 import typer
 from jinja2 import TemplateError
 from pydantic import ValidationError
@@ -60,7 +62,7 @@ from agentflow.local_shell import (
     target_uses_login_bash,
 )
 from agentflow.prepared import resolve_local_workdir
-from agentflow.specs import AgentKind, LocalTarget, PipelineSpec, normalize_agent_name, provider_uses_kimi_anthropic_auth, resolve_provider
+from agentflow.specs import AgentKind, LocalTarget, PipelineSpec, RunRecord, normalize_agent_name, provider_uses_kimi_anthropic_auth, resolve_provider
 from agentflow.tuned_agents import list_tuned_agent_records, resolve_tuned_agent_version, run_evolution_from_payload
 
 app = typer.Typer(add_completion=False)
@@ -116,6 +118,114 @@ def _build_store(runs_dir: str) -> object:
     from agentflow.store import RunStore
 
     return RunStore(runs_dir)
+
+
+def _daemon_metadata_path(runs_dir: str) -> Path:
+    override = os.getenv("AGENTFLOW_DAEMON_METADATA_PATH")
+    if override:
+        return Path(override).expanduser().resolve()
+    return (Path(runs_dir).expanduser().resolve() / "daemon.json")
+
+
+def _resolve_daemon_host() -> str:
+    return os.getenv("AGENTFLOW_DAEMON_HOST", "127.0.0.1")
+
+
+def _resolve_daemon_port() -> int:
+    raw = os.getenv("AGENTFLOW_DAEMON_PORT", "8000")
+    try:
+        return int(raw)
+    except ValueError as exc:
+        raise typer.BadParameter(f"`AGENTFLOW_DAEMON_PORT` must be an integer, got `{raw}`.") from exc
+
+
+def _daemon_base_url(host: str, port: int) -> str:
+    return f"http://{host}:{port}"
+
+
+def _load_daemon_metadata(metadata_path: Path) -> dict[str, object] | None:
+    try:
+        payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    return payload
+
+
+def _write_daemon_metadata(metadata_path: Path, *, host: str, port: int, pid: int) -> None:
+    metadata_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {"host": host, "port": port, "pid": pid}
+    metadata_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+def _daemon_is_healthy(base_url: str) -> bool:
+    try:
+        response = httpx.get(f"{base_url}/api/runs", timeout=0.5)
+    except httpx.RequestError:
+        return False
+    return response.status_code == 200
+
+
+def _start_daemon(*, host: str, port: int, runs_dir: str, max_concurrent_runs: int) -> subprocess.Popen:
+    command = [sys.executable, "-m", "agentflow.cli", "serve", host, str(port)]
+    env = dict(os.environ)
+    env["AGENTFLOW_RUNS_DIR"] = runs_dir
+    env["AGENTFLOW_MAX_CONCURRENT_RUNS"] = str(max_concurrent_runs)
+    return subprocess.Popen(
+        command,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        env=env,
+        start_new_session=True,
+    )
+
+
+def _wait_for_daemon(base_url: str, *, timeout_seconds: float = 5.0) -> None:
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        if _daemon_is_healthy(base_url):
+            return
+        time.sleep(0.1)
+    raise typer.Exit(code=1)
+
+
+def _ensure_daemon(
+    runs_dir: str,
+    max_concurrent_runs: int,
+    *,
+    host: str,
+    port: int,
+    metadata_path: Path,
+) -> str:
+    metadata = _load_daemon_metadata(metadata_path)
+    metadata_host = metadata.get("host") if isinstance(metadata, dict) else None
+    metadata_port = metadata.get("port") if isinstance(metadata, dict) else None
+    if isinstance(metadata_host, str) and isinstance(metadata_port, int) and (metadata_host, metadata_port) == (host, port):
+        base_url = _daemon_base_url(metadata_host, metadata_port)
+        if _daemon_is_healthy(base_url):
+            return base_url
+
+    base_url = _daemon_base_url(host, port)
+    process = _start_daemon(host=host, port=port, runs_dir=runs_dir, max_concurrent_runs=max_concurrent_runs)
+    _write_daemon_metadata(metadata_path, host=host, port=port, pid=process.pid)
+    _wait_for_daemon(base_url)
+    return base_url
+
+
+def _submit_detached_run(pipeline: object, base_url: str) -> RunRecord:
+    payload: dict[str, object] = {"pipeline": pipeline.model_dump(mode="json")}
+    base_dir = getattr(pipeline, "base_dir", None)
+    if isinstance(base_dir, str) and base_dir:
+        payload["base_dir"] = base_dir
+    response = httpx.post(f"{base_url}/api/runs", json=payload, timeout=10.0)
+    try:
+        response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        detail = exc.response.text.strip()
+        typer.echo(f"Failed to submit run: {detail}", err=True)
+        raise typer.Exit(code=1) from exc
+    return RunRecord.model_validate(response.json())
 
 
 def _render_tuned_agents_summary(records: list[object]) -> str:
@@ -2318,6 +2428,12 @@ def run(
     path: str,
     runs_dir: str = typer.Option(".agentflow/runs", envvar="AGENTFLOW_RUNS_DIR"),
     max_concurrent_runs: int = typer.Option(2, envvar="AGENTFLOW_MAX_CONCURRENT_RUNS"),
+    detach: bool = typer.Option(
+        False,
+        "--detach",
+        "-d",
+        help="Submit the run to the local daemon and exit without waiting for completion.",
+    ),
     output: RunOutputFormat = typer.Option(
         RunOutputFormat.AUTO,
         "--output",
@@ -2341,6 +2457,20 @@ def run(
         output,
         show_preflight=show_preflight,
     )
+    if detach:
+        host = _resolve_daemon_host()
+        port = _resolve_daemon_port()
+        metadata_path = _daemon_metadata_path(runs_dir)
+        base_url = _ensure_daemon(
+            runs_dir,
+            max_concurrent_runs,
+            host=host,
+            port=port,
+            metadata_path=metadata_path,
+        )
+        record = _submit_detached_run(pipeline, base_url)
+        _echo_run_result(record, output=output)
+        raise typer.Exit(code=0)
     _run_pipeline(pipeline, runs_dir, max_concurrent_runs, output)
 
 
