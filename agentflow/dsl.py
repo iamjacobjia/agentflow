@@ -432,9 +432,12 @@ def evolve(
     payload_json = json.dumps(payload, ensure_ascii=False)
     code = (
         "import json\n"
+        "import sys\n"
         "from agentflow.tuned_agents import run_evolution_from_payload\n\n"
+        "def _evolution_progress(event):\n"
+        "    print(json.dumps(event, ensure_ascii=False), file=sys.stderr, flush=True)\n\n"
         f"payload = json.loads(r'''{payload_json}''')\n"
-        "result = run_evolution_from_payload(payload)\n"
+        "result = run_evolution_from_payload(payload, progress=_evolution_progress)\n"
         "print(json.dumps(result, ensure_ascii=False))\n"
     )
     evolve_task_id = task_id or f"evolve_{profile.replace('-', '_')}"

@@ -3400,6 +3400,192 @@ def test_status_command_supports_json_summary_output(monkeypatch):
     }
 
 
+def test_status_command_renders_evolution_progress(monkeypatch):
+    record = _completed_run(
+        "run-status-evolve",
+        pipeline_name="status-pipeline",
+        status="running",
+        pipeline_nodes=[
+            SimpleNamespace(id="plan", agent=SimpleNamespace(value="codex")),
+            SimpleNamespace(id="evolve", agent=SimpleNamespace(value="python")),
+            SimpleNamespace(id="evolve_b", agent=SimpleNamespace(value="python")),
+        ],
+        nodes={
+            "plan": SimpleNamespace(
+                status=SimpleNamespace(value="completed"),
+                current_attempt=1,
+                attempts=[SimpleNamespace(number=1)],
+                stderr_lines=[],
+                stdout_lines=[],
+            ),
+            "evolve": SimpleNamespace(
+                status=SimpleNamespace(value="running"),
+                current_attempt=1,
+                attempts=[SimpleNamespace(number=1)],
+                stderr_lines=[
+                    "not-json",
+                    json.dumps({"agentflow_event": "evolution_progress", "stage": "start", "attempt": 1}),
+                    json.dumps(
+                        {
+                            "agentflow_event": "evolution_progress",
+                            "stage": "build",
+                            "attempt": 1,
+                            "status": "started",
+                            "command": "build",
+                        }
+                    ),
+                    json.dumps(
+                        {
+                            "agentflow_event": "evolution_progress",
+                            "stage": "build",
+                            "attempt": 1,
+                            "status": "completed",
+                        }
+                    ),
+                    json.dumps(
+                        {
+                            "agentflow_event": "evolution_progress",
+                            "stage": "final",
+                            "attempt": 1,
+                            "status": "success",
+                        }
+                    ),
+                ],
+                stdout_lines=[],
+            ),
+            "evolve_b": SimpleNamespace(
+                status=SimpleNamespace(value="running"),
+                current_attempt=1,
+                attempts=[SimpleNamespace(number=1)],
+                stderr_lines=[
+                    json.dumps(
+                        {
+                            "agentflow_event": "evolution_progress",
+                            "stage": "build",
+                            "attempt": 1,
+                            "status": "started",
+                            "command": "build-b",
+                        }
+                    )
+                ],
+                stdout_lines=[],
+            ),
+        },
+    )
+    record.finished_at = None
+    events = []
+
+    monkeypatch.setattr(
+        agentflow.cli,
+        "_build_store",
+        lambda runs_dir: SimpleNamespace(
+            get_run=lambda run_id: record,
+            get_events=lambda run_id: events,
+            run_dir=lambda run_id: Path(runs_dir) / run_id,
+        ),
+    )
+    monkeypatch.setattr(agentflow.cli, "_stream_supports_tty_summary", lambda *, err: True)
+
+    result = runner.invoke(app, ["status", "run-status-evolve"])
+
+    assert result.exit_code == 0
+    assert "Evolution progress:" in result.stdout
+    assert "evolve: start (attempt 1)" in result.stdout
+    assert "evolve: build started (attempt 1, command=build)" in result.stdout
+    assert "evolve: build completed (attempt 1)" in result.stdout
+    assert "evolve: final success (attempt 1)" in result.stdout
+    assert "evolve_b: build started (attempt 1, command=build-b)" in result.stdout
+
+
+def test_status_command_returns_evolution_progress_json(monkeypatch):
+    record = _completed_run(
+        "run-status-evolve-json",
+        pipeline_name="status-pipeline",
+        status="running",
+        pipeline_nodes=[
+            SimpleNamespace(id="plan", agent=SimpleNamespace(value="codex")),
+            SimpleNamespace(id="evolve", agent=SimpleNamespace(value="python")),
+        ],
+        nodes={
+            "plan": SimpleNamespace(
+                status=SimpleNamespace(value="completed"),
+                current_attempt=1,
+                attempts=[SimpleNamespace(number=1)],
+                stderr_lines=[],
+                stdout_lines=[],
+            ),
+            "evolve": SimpleNamespace(
+                status=SimpleNamespace(value="running"),
+                current_attempt=1,
+                attempts=[SimpleNamespace(number=1)],
+                stderr_lines=[
+                    json.dumps({"agentflow_event": "evolution_progress", "stage": "start", "attempt": 1}),
+                    "plain text",
+                    json.dumps(
+                        {
+                            "agentflow_event": "evolution_progress",
+                            "stage": "build",
+                            "attempt": 1,
+                            "status": "started",
+                            "command": "build",
+                        }
+                    ),
+                    json.dumps(
+                        {
+                            "agentflow_event": "evolution_progress",
+                            "stage": "build",
+                            "attempt": 1,
+                            "status": "failed",
+                            "detail": "exit 1",
+                        }
+                    ),
+                ],
+                stdout_lines=[],
+            ),
+        },
+    )
+    record.finished_at = None
+
+    monkeypatch.setattr(
+        agentflow.cli,
+        "_build_store",
+        lambda runs_dir: SimpleNamespace(
+            get_run=lambda run_id: record,
+            get_events=lambda run_id: [],
+            run_dir=lambda run_id: Path(runs_dir) / run_id,
+        ),
+    )
+
+    result = runner.invoke(app, ["status", "run-status-evolve-json", "--output", "json-summary"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["evolution_progress"] == [
+        {
+            "agentflow_event": "evolution_progress",
+            "stage": "start",
+            "attempt": 1,
+            "node_id": "evolve",
+        },
+        {
+            "agentflow_event": "evolution_progress",
+            "stage": "build",
+            "attempt": 1,
+            "status": "started",
+            "command": "build",
+            "node_id": "evolve",
+        },
+        {
+            "agentflow_event": "evolution_progress",
+            "stage": "build",
+            "attempt": 1,
+            "status": "failed",
+            "detail": "exit 1",
+            "node_id": "evolve",
+        },
+    ]
+
+
 def test_status_command_shows_optimization_session(monkeypatch):
     record = _completed_run(
         "run-status-opt",

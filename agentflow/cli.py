@@ -518,6 +518,8 @@ def _build_run_summary(record: object, run_dir: Path | str | None = None) -> dic
 
 _STATUS_INACTIVE_NODE_STATUSES = {"pending", "queued", "ready"}
 _STATUS_ACTIVE_NODE_STATUSES = {"running", "retrying", "cancelling"}
+_EVOLUTION_PROGRESS_KEYS = {"agentflow_event", "stage", "attempt", "status", "command", "detail", "node_id"}
+_EVOLUTION_PROGRESS_PREVIEW_LIMIT = 5
 
 
 def _normalize_event_payload(event: object) -> dict[str, object]:
@@ -581,6 +583,56 @@ def _render_status_event(event_payload: dict[str, object]) -> str:
     return " ".join(parts)
 
 
+def _parse_evolution_progress_line(line: str) -> dict[str, object] | None:
+    try:
+        payload = json.loads(line)
+    except (TypeError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    if payload.get("agentflow_event") != "evolution_progress":
+        return None
+    stage = payload.get("stage")
+    attempt = payload.get("attempt")
+    if not stage or attempt is None:
+        return None
+    return {key: payload[key] for key in _EVOLUTION_PROGRESS_KEYS if key in payload}
+
+
+def _build_status_evolution_progress(record: object) -> list[dict[str, object]]:
+    nodes: dict[str, object] = getattr(record, "nodes", {}) or {}
+    events: list[dict[str, object]] = []
+    for node_id, node in nodes.items():
+        for line in getattr(node, "stderr_lines", []) or []:
+            if not isinstance(line, str):
+                continue
+            event = _parse_evolution_progress_line(line)
+            if event:
+                event["node_id"] = node_id
+                events.append(event)
+    return events
+
+
+def _render_evolution_progress(event: dict[str, object]) -> str:
+    node_id = event.get("node_id") or "-"
+    stage = event.get("stage") or "-"
+    status = event.get("status")
+    label = f"{stage} {status}" if status else str(stage)
+    pieces: list[str] = []
+    attempt = event.get("attempt")
+    if attempt is not None:
+        pieces.append(f"attempt {attempt}")
+    command = event.get("command")
+    if command:
+        pieces.append(f"command={command}")
+    detail = event.get("detail")
+    if detail:
+        pieces.append(f"detail={detail}")
+    if not pieces:
+        return f"{node_id}: {label}"
+    return f"{node_id}: {label} ({', '.join(pieces)})"
+
+
 def _build_status_progress(record: object) -> dict[str, object]:
     nodes: dict[str, object] = getattr(record, "nodes", {}) or {}
     pipeline_nodes = _pipeline_node_map(record)
@@ -641,6 +693,7 @@ def _build_status_summary(
     summary["events"] = normalized_events
     summary["recent_events"] = normalized_events[-5:]
     summary["progress"] = _build_status_progress(record)
+    summary["evolution_progress"] = _build_status_evolution_progress(record)
     optimization = _build_status_optimization(record)
     if optimization is not None:
         summary["optimization"] = optimization
@@ -723,6 +776,14 @@ def _render_status_summary(
                 active_entries.append(rendered)
             if active_entries:
                 lines.append(f"Active: {', '.join(active_entries)}")
+
+    evolution_progress = summary.get("evolution_progress")
+    if isinstance(evolution_progress, list) and evolution_progress:
+        lines.append("Evolution progress:")
+        for event in evolution_progress[-_EVOLUTION_PROGRESS_PREVIEW_LIMIT:]:
+            if not isinstance(event, dict):
+                continue
+            lines.append(f"- {_render_evolution_progress(event)}")
 
     recent_events = summary.get("recent_events")
     if isinstance(recent_events, list) and recent_events:
