@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 from pathlib import Path
+import textwrap
 
 import pytest
 
@@ -636,6 +638,96 @@ async def test_local_runner_timeout_uses_standard_exit_code(tmp_path: Path):
     assert result.stderr_lines == ["Timed out after 1s"]
 
 
+@pytest.mark.asyncio
+async def test_local_runner_stdin_none_does_not_inherit_outer_pipe(tmp_path: Path):
+    outer_script = textwrap.dedent(
+        """
+import asyncio
+import json
+import sys
+from pathlib import Path
+
+from agentflow.prepared import ExecutionPaths, PreparedExecution
+from agentflow.runners.local import LocalRunner
+from agentflow.specs import NodeSpec
+
+async def _noop_output(stream_name: str, text: str) -> None:
+    return None
+
+async def main() -> None:
+    workdir = Path(sys.argv[1])
+    runtime_dir = workdir / ".runtime"
+    node = NodeSpec.model_validate(
+        {
+            "id": "stdin-inherit-repro",
+            "agent": "codex",
+            "prompt": "hi",
+            "timeout_seconds": 1,
+        }
+    )
+    prepared = PreparedExecution(
+        command=[
+            "python3",
+            "-c",
+            'import sys; print("child-start", flush=True); sys.stdin.read(); print("child-done", flush=True)',
+        ],
+        env={},
+        cwd=str(workdir),
+        trace_kind="codex",
+        stdin=None,
+    )
+    paths = ExecutionPaths(
+        host_workdir=workdir,
+        host_runtime_dir=runtime_dir,
+        target_workdir=str(workdir),
+        target_runtime_dir=str(runtime_dir),
+        app_root=Path.cwd(),
+    )
+    result = await LocalRunner().execute(node, prepared, paths, _noop_output, lambda: False)
+    print(
+        json.dumps(
+            {
+                "exit_code": result.exit_code,
+                "stdout_lines": result.stdout_lines,
+                "stderr_lines": result.stderr_lines,
+                "timed_out": result.timed_out,
+            }
+        ),
+        flush=True,
+    )
+
+asyncio.run(main())
+"""
+    )
+    repo_root = Path(__file__).resolve().parents[1]
+    outer = await asyncio.create_subprocess_exec(
+        "python3",
+        "-c",
+        outer_script,
+        str(tmp_path),
+        cwd=str(repo_root),
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+
+    assert outer.stdin is not None
+    await asyncio.wait_for(outer.wait(), timeout=5)
+
+    stdout = await outer.stdout.read()
+    stderr = await outer.stderr.read()
+    outer.stdin.close()
+
+    assert outer.returncode == 0
+    assert stderr.decode("utf-8") == ""
+
+    payload = json.loads(stdout.decode("utf-8"))
+    assert payload["exit_code"] == 0
+    assert payload["stdout_lines"] == ["child-start", "child-done"]
+    assert payload["timed_out"] is False
+    assert payload["stderr_lines"] == []
+
+
 def test_local_runner_plan_execution_includes_shell_wrapper(tmp_path: Path):
     node = NodeSpec.model_validate(
         {
@@ -732,6 +824,51 @@ def test_container_runner_plan_execution_shows_host_and_container_context(tmp_pa
         "workdir": "/workspace/task",
         "env": {"OPENAI_API_KEY": "secret"},
     }
+
+
+@pytest.mark.asyncio
+async def test_container_runner_execute_inherits_local_stdin_handling(tmp_path: Path, monkeypatch):
+    node = NodeSpec.model_validate(
+        {
+            "id": "container-stdin-devnull",
+            "agent": "codex",
+            "prompt": "hi",
+            "timeout_seconds": 5,
+            "target": {"kind": "container", "image": "ghcr.io/example/agentflow:test"},
+        }
+    )
+    prepared = PreparedExecution(
+        command=["ignored"],
+        env={},
+        cwd=str(tmp_path),
+        trace_kind="codex",
+        stdin=None,
+    )
+
+    def _container_prepared(_self, _node: NodeSpec, _prepared: PreparedExecution, _paths: ExecutionPaths) -> PreparedExecution:
+        return PreparedExecution(
+            command=[
+                "python3",
+                "-c",
+                "import sys; print('stdin-start', flush=True); sys.stdin.read(); print('stdin-end', flush=True)",
+            ],
+            env={},
+            cwd=str(tmp_path),
+            trace_kind=_prepared.trace_kind,
+            stdin=None,
+        )
+
+    monkeypatch.setattr(ContainerRunner, "_container_prepared", _container_prepared)
+
+    result = await asyncio.wait_for(
+        ContainerRunner().execute(node, prepared, _paths(tmp_path), _noop_output, lambda: False),
+        timeout=3,
+    )
+
+    assert result.exit_code == 0
+    assert result.timed_out is False
+    assert result.cancelled is False
+    assert result.stdout_lines == ["stdin-start", "stdin-end"]
 
 
 @pytest.mark.asyncio
