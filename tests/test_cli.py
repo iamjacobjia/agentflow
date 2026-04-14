@@ -2954,6 +2954,42 @@ def test_run_detach_uses_daemon_env_overrides(monkeypatch, tmp_path):
     assert captured["submitted_base_url"] == "http://daemon-host:8123"
 
 
+def test_start_daemon_uses_explicit_host_and_port_flags(monkeypatch):
+    captured: dict[str, object] = {}
+
+    class FakeProcess:
+        pid = 12345
+
+    def fake_popen(command, **kwargs):
+        captured["command"] = command
+        captured["kwargs"] = kwargs
+        return FakeProcess()
+
+    monkeypatch.setattr(agentflow.cli.subprocess, "Popen", fake_popen)
+
+    process = agentflow.cli._start_daemon(
+        host="127.0.0.1",
+        port=8123,
+        runs_dir="/tmp/agentflow-runs",
+        max_concurrent_runs=5,
+    )
+
+    assert process.pid == 12345
+    assert captured["command"] == [
+        sys.executable,
+        "-m",
+        "agentflow.cli",
+        "serve",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "8123",
+    ]
+    assert captured["kwargs"]["start_new_session"] is True
+    assert captured["kwargs"]["env"]["AGENTFLOW_RUNS_DIR"] == "/tmp/agentflow-runs"
+    assert captured["kwargs"]["env"]["AGENTFLOW_MAX_CONCURRENT_RUNS"] == "5"
+
+
 def test_run_defaults_to_summary_on_tty(monkeypatch):
     class FakeOrchestrator:
         async def submit(self, pipeline: object):
@@ -3584,6 +3620,65 @@ def test_status_command_returns_evolution_progress_json(monkeypatch):
             "node_id": "evolve",
         },
     ]
+
+
+def test_status_command_uses_live_node_trace_for_evolution_progress(monkeypatch):
+    record = _completed_run(
+        "run-status-evolve-live",
+        pipeline_name="status-pipeline",
+        status="running",
+        pipeline_nodes=[
+            SimpleNamespace(id="evolve", agent=SimpleNamespace(value="python")),
+        ],
+        nodes={
+            "evolve": SimpleNamespace(
+                status=SimpleNamespace(value="pending"),
+                current_attempt=1,
+                attempts=[SimpleNamespace(number=1)],
+                stderr_lines=[],
+                stdout_lines=[],
+            ),
+        },
+    )
+    record.finished_at = None
+    live_events = [
+        _run_event(
+            "node_trace",
+            timestamp="2026-04-12T10:00:02+00:00",
+            node_id="evolve",
+            data={
+                "trace": {
+                    "source": "stderr",
+                    "content": json.dumps(
+                        {
+                            "agentflow_event": "evolution_progress",
+                            "stage": "optimizer",
+                            "attempt": 1,
+                            "status": "started",
+                            "command": "optimizer",
+                        }
+                    ),
+                }
+            },
+        )
+    ]
+
+    monkeypatch.setattr(
+        agentflow.cli,
+        "_build_store",
+        lambda runs_dir: SimpleNamespace(
+            get_run=lambda run_id: record,
+            get_events=lambda run_id: live_events,
+            run_dir=lambda run_id: Path(runs_dir) / run_id,
+        ),
+    )
+    monkeypatch.setattr(agentflow.cli, "_stream_supports_tty_summary", lambda *, err: True)
+
+    result = runner.invoke(app, ["status", "run-status-evolve-live"])
+
+    assert result.exit_code == 0
+    assert "Evolution progress:" in result.stdout
+    assert "evolve: optimizer started (attempt 1, command=optimizer)" in result.stdout
 
 
 def test_status_command_shows_optimization_session(monkeypatch):

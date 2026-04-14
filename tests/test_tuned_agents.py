@@ -82,6 +82,8 @@ def test_evolve_helper_filters_source_nodes_and_builds_payload():
     assert evolve_node["depends_on"] == ["plan"]
     assert '"source_nodes": ["plan"]' in evolve_node["prompt"]
     assert "{{ nodes.plan.artifacts.trace_jsonl }}" in evolve_node["prompt"]
+    assert "sys.path.insert(0," in evolve_node["prompt"]
+    assert "progress=_evolution_progress" in evolve_node["prompt"]
 
 
 def test_resolve_node_for_execution_uses_latest_registry_entry(tmp_path):

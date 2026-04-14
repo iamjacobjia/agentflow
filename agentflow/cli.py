@@ -168,7 +168,7 @@ def _daemon_is_healthy(base_url: str) -> bool:
 
 
 def _start_daemon(*, host: str, port: int, runs_dir: str, max_concurrent_runs: int) -> subprocess.Popen:
-    command = [sys.executable, "-m", "agentflow.cli", "serve", host, str(port)]
+    command = [sys.executable, "-m", "agentflow.cli", "serve", "--host", host, "--port", str(port)]
     env = dict(os.environ)
     env["AGENTFLOW_RUNS_DIR"] = runs_dir
     env["AGENTFLOW_MAX_CONCURRENT_RUNS"] = str(max_concurrent_runs)
@@ -599,9 +599,9 @@ def _parse_evolution_progress_line(line: str) -> dict[str, object] | None:
     return {key: payload[key] for key in _EVOLUTION_PROGRESS_KEYS if key in payload}
 
 
-def _build_status_evolution_progress(record: object) -> list[dict[str, object]]:
+def _build_status_evolution_progress(record: object, events: list[object]) -> list[dict[str, object]]:
     nodes: dict[str, object] = getattr(record, "nodes", {}) or {}
-    events: list[dict[str, object]] = []
+    parsed_events: list[dict[str, object]] = []
     for node_id, node in nodes.items():
         for line in getattr(node, "stderr_lines", []) or []:
             if not isinstance(line, str):
@@ -609,8 +609,38 @@ def _build_status_evolution_progress(record: object) -> list[dict[str, object]]:
             event = _parse_evolution_progress_line(line)
             if event:
                 event["node_id"] = node_id
-                events.append(event)
-    return events
+                parsed_events.append(event)
+
+    for event in events:
+        payload = _normalize_event_payload(event)
+        if payload.get("type") != "node_trace":
+            continue
+        node_id = payload.get("node_id")
+        if not isinstance(node_id, str) or not node_id:
+            continue
+        trace = payload.get("data", {}).get("trace")
+        if not isinstance(trace, dict):
+            continue
+        if trace.get("source") != "stderr":
+            continue
+        content = trace.get("content")
+        if not isinstance(content, str):
+            continue
+        parsed = _parse_evolution_progress_line(content)
+        if parsed is None:
+            continue
+        parsed["node_id"] = node_id
+        parsed_events.append(parsed)
+
+    deduped: list[dict[str, object]] = []
+    seen: set[str] = set()
+    for event in parsed_events:
+        key = json.dumps(event, sort_keys=True, ensure_ascii=False)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(event)
+    return deduped
 
 
 def _render_evolution_progress(event: dict[str, object]) -> str:
@@ -693,7 +723,7 @@ def _build_status_summary(
     summary["events"] = normalized_events
     summary["recent_events"] = normalized_events[-5:]
     summary["progress"] = _build_status_progress(record)
-    summary["evolution_progress"] = _build_status_evolution_progress(record)
+    summary["evolution_progress"] = _build_status_evolution_progress(record, events)
     optimization = _build_status_optimization(record)
     if optimization is not None:
         summary["optimization"] = optimization

@@ -6,6 +6,7 @@ from copy import deepcopy
 from contextvars import ContextVar, Token
 from dataclasses import dataclass, field
 import json
+from pathlib import Path
 from types import TracebackType
 from typing import Any
 
@@ -430,9 +431,11 @@ def evolve(
         "workspace_dir": "{{ pipeline.working_dir }}",
     }
     payload_json = json.dumps(payload, ensure_ascii=False)
+    source_root = Path(__file__).resolve().parents[1]
     code = (
         "import json\n"
         "import sys\n"
+        f"sys.path.insert(0, {json.dumps(str(source_root), ensure_ascii=False)})\n"
         "from agentflow.tuned_agents import run_evolution_from_payload\n\n"
         "def _evolution_progress(event):\n"
         "    print(json.dumps(event, ensure_ascii=False), file=sys.stderr, flush=True)\n\n"
