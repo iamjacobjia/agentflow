@@ -15,12 +15,12 @@ evolution_prompt: |
 
   Primary objective:
   - Improve Codex behavior based on the failures, friction, and missed opportunities visible in those traces.
-  - Prioritize the smallest change that improves local workspace inspection, shell/tool execution, and planning behavior when Codex is running inside an externally sandboxed environment.
 
   Explicitly allowed modifications:
   - System prompts, developer instructions, prompt templates, review prompts, collaboration-mode templates, and other instruction scaffolding.
   - Tool registration, tool availability, tool routing, tool defaults, tool descriptions, tool metadata, and related schemas or configuration.
-  - Use the `tunable_surfaces` mapping below as the file-level source of truth for the few implementation areas that are in scope for this profile.
+  - Built-in agent roles, skills surfaced to the model, and agent orchestration behavior where it materially improves the traced workflows.
+  - Use the `tunable_surfaces` mapping below as the file-level source of truth for where each adjustable surface is implemented.
 
   Constraints:
   - Prefer the smallest coherent set of changes that clearly addresses the traced issues.
@@ -37,34 +37,133 @@ tunable_surfaces:
       - codex-rs/core/gpt_5_2_prompt.md
       - codex-rs/core/prompt_with_apply_patch_instructions.md
       - codex-rs/core/src/codex.rs
-  - name: Collaboration modes and planning guidance
-    notes: Collaboration-mode instructions plus the plan/request-user-input tool wording that influence how Codex reacts before doing work.
+  - name: Model instruction templates and personalities
+    notes: Template fragments that shape instruction rendering and assistant tone.
+    paths:
+      - codex-rs/core/templates/model_instructions/gpt-5.2-codex_instructions_template.md
+      - codex-rs/core/templates/personalities/gpt-5.2-codex_friendly.md
+      - codex-rs/core/templates/personalities/gpt-5.2-codex_pragmatic.md
+  - name: Review prompts and review-thread messaging
+    notes: Review mode system prompt, request rendering, and final review history messages.
+    paths:
+      - codex-rs/core/review_prompt.md
+      - codex-rs/core/src/client_common.rs
+      - codex-rs/core/src/review_prompts.rs
+      - codex-rs/core/templates/review/exit_success.xml
+      - codex-rs/core/templates/review/exit_interrupted.xml
+      - codex-rs/core/templates/review/history_message_completed.md
+      - codex-rs/core/templates/review/history_message_interrupted.md
+  - name: Collaboration modes
+    notes: Default, execute, pair-programming, and plan-mode collaboration instructions.
     paths:
       - codex-rs/collaboration-mode-templates/templates/default.md
       - codex-rs/collaboration-mode-templates/templates/execute.md
       - codex-rs/collaboration-mode-templates/templates/pair_programming.md
       - codex-rs/collaboration-mode-templates/templates/plan.md
-      - codex-rs/tools/src/plan_tool.rs
-      - codex-rs/tools/src/request_user_input_tool.rs
-  - name: Shell, sandbox, and local execution behavior
-    notes: Local shell tool descriptions and the core sandbox/exec code paths involved in trace failures.
+      - codex-rs/core/templates/collab/experimental_prompt.md
+  - name: Sub-agent roles and orchestration prompts
+    notes: Built-in sub-agent role definitions and orchestrator-facing role scaffolding.
     paths:
-      - codex-rs/tools/src/local_tool.rs
-      - codex-rs/core/src/shell.rs
-      - codex-rs/core/src/exec.rs
-      - codex-rs/core/src/exec_policy.rs
-      - codex-rs/core/src/user_shell_command.rs
-      - codex-rs/core/src/landlock.rs
-      - codex-rs/core/src/seatbelt.rs
-      - codex-rs/core/src/windows_sandbox.rs
-  - name: Patch and tool wiring
-    notes: Apply-patch grammar plus the tool registry files that control how planning and shell tools are exposed.
+      - codex-rs/core/src/agent/role.rs
+      - codex-rs/core/src/agent/builtins/explorer.toml
+      - codex-rs/core/src/agent/builtins/awaiter.toml
+      - codex-rs/core/templates/agents/orchestrator.md
+  - name: Tool registry, defaults, and code-mode exposure
+    notes: Global tool registration, tool defaults, model-visible tool specs, and code-mode tool shaping.
     paths:
-      - codex-rs/tools/src/apply_patch_tool.rs
-      - codex-rs/tools/src/tool_apply_patch.lark
+      - codex-rs/core/src/tools/spec.rs
+      - codex-rs/core/src/tools/registry.rs
       - codex-rs/tools/src/tool_registry_plan.rs
       - codex-rs/tools/src/tool_registry_plan_types.rs
       - codex-rs/tools/src/tool_config.rs
-      - codex-rs/tools/src/tool_definition.rs
       - codex-rs/tools/src/tool_spec.rs
+      - codex-rs/tools/src/tool_definition.rs
       - codex-rs/tools/src/code_mode.rs
+      - codex-rs/core/src/tools/code_mode/mod.rs
+      - codex-rs/core/src/tools/code_mode/execute_handler.rs
+      - codex-rs/core/src/tools/code_mode/wait_handler.rs
+  - name: Shell, exec, and permission request tools
+    notes: Shell tool schemas, exec-command behavior, permission prompting, and runtime handlers.
+    paths:
+      - codex-rs/tools/src/local_tool.rs
+      - codex-rs/core/src/unified_exec/process_manager.rs
+      - codex-rs/core/src/tools/handlers/shell.rs
+      - codex-rs/core/src/tools/handlers/request_permissions.rs
+      - codex-rs/core/src/tools/handlers/unified_exec.rs
+  - name: Apply-patch and editing tools
+    notes: Patch grammar, freeform/function apply-patch descriptions, and runtime execution.
+    paths:
+      - codex-rs/tools/src/apply_patch_tool.rs
+      - codex-rs/tools/src/tool_apply_patch.lark
+      - codex-rs/core/src/tools/handlers/apply_patch.rs
+      - codex-rs/core/src/tools/runtimes/apply_patch.rs
+  - name: Planning and request-user-input tools
+    notes: Plan tool wording, request-user-input descriptions, and runtime handlers.
+    paths:
+      - codex-rs/tools/src/plan_tool.rs
+      - codex-rs/tools/src/request_user_input_tool.rs
+      - codex-rs/core/src/tools/handlers/plan.rs
+      - codex-rs/core/src/tools/handlers/request_user_input.rs
+  - name: Multi-agent and batch-agent tools
+    notes: Spawn/wait/send/close tool descriptions and the runtime orchestration for sub-agents and batch jobs.
+    paths:
+      - codex-rs/tools/src/agent_tool.rs
+      - codex-rs/tools/src/agent_job_tool.rs
+      - codex-rs/core/src/tools/handlers/multi_agents.rs
+      - codex-rs/core/src/tools/handlers/multi_agents_v2.rs
+      - codex-rs/core/src/tools/handlers/agent_jobs.rs
+  - name: Tool search and tool suggestion UX
+    notes: Search-tool descriptions, suggestion metadata, and runtime handlers for discovering deferred tools/connectors.
+    paths:
+      - codex-rs/tools/src/tool_discovery.rs
+      - codex-rs/core/templates/search_tool/tool_description.md
+      - codex-rs/core/templates/search_tool/tool_suggest_description.md
+      - codex-rs/core/src/tools/handlers/tool_search.rs
+      - codex-rs/core/src/tools/handlers/tool_suggest.rs
+  - name: Image and utility tools
+    notes: View-image and utility tool descriptions plus their runtime handlers.
+    paths:
+      - codex-rs/tools/src/view_image.rs
+      - codex-rs/tools/src/utility_tool.rs
+      - codex-rs/core/src/tools/handlers/view_image.rs
+      - codex-rs/core/src/tools/handlers/list_dir.rs
+  - name: MCP tool descriptions, exposure, and approval messaging
+    notes: MCP tool annotation, namespace exposure, approval text, and model-visible MCP wrappers.
+    paths:
+      - codex-rs/codex-mcp/src/mcp_connection_manager.rs
+      - codex-rs/core/src/mcp_tool_exposure.rs
+      - codex-rs/core/src/mcp_tool_approval_templates.rs
+      - codex-rs/core/src/consequential_tool_message_templates.json
+      - codex-rs/tools/src/mcp_tool.rs
+      - codex-rs/tools/src/mcp_resource_tool.rs
+      - codex-rs/core/src/tools/handlers/mcp.rs
+      - codex-rs/core/src/tools/handlers/mcp_resource.rs
+  - name: Apps, project-doc, and user-instruction context injection
+    notes: App/connectors instructions, AGENTS.md/project-doc rendering, and user instruction ingestion.
+    paths:
+      - codex-rs/core/src/apps/render.rs
+      - codex-rs/core/src/project_doc.rs
+      - codex-rs/core/hierarchical_agents_message.md
+      - codex-rs/instructions/src/lib.rs
+      - codex-rs/instructions/src/fragment.rs
+      - codex-rs/instructions/src/user_instructions.rs
+  - name: Compaction and memories
+    notes: Auto-compaction prompts, memory prompts, and memory stage configuration.
+    paths:
+      - codex-rs/core/src/compact.rs
+      - codex-rs/core/templates/compact/prompt.md
+      - codex-rs/core/templates/compact/summary_prefix.md
+      - codex-rs/core/src/memories/mod.rs
+      - codex-rs/core/src/memories/prompts.rs
+      - codex-rs/core/templates/memories/consolidation.md
+      - codex-rs/core/templates/memories/read_path.md
+      - codex-rs/core/templates/memories/stage_one_input.md
+      - codex-rs/core/templates/memories/stage_one_system.md
+  - name: Realtime and guardian policy prompts
+    notes: Realtime backend prompting and guardian/approval policy prompt templates.
+    paths:
+      - codex-rs/core/src/realtime_prompt.rs
+      - codex-rs/core/templates/realtime/backend_prompt.md
+      - codex-rs/core/src/guardian/prompt.rs
+      - codex-rs/core/src/guardian/policy.md
+      - codex-rs/core/src/guardian/policy_template.md

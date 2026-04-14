@@ -372,7 +372,7 @@ def test_repo_includes_codex_tuner_profile():
     assert resolved.config.env["AGENTFLOW_CODEX_SANDBOX_MODE"] == "danger-full-access"
     assert "System prompts" in resolved.config.evolution_prompt
     assert "tool descriptions" in resolved.config.evolution_prompt
-    assert len(resolved.config.tunable_surfaces) >= 4
+    assert len(resolved.config.tunable_surfaces) >= 10
     assert resolved.config.tunable_surfaces[0].name == "Base model prompts and prompt assembly"
     assert "codex-rs/core/gpt_5_codex_prompt.md" in resolved.config.tunable_surfaces[0].paths
 
