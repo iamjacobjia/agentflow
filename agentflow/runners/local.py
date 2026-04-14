@@ -281,7 +281,7 @@ class LocalRunner(Runner):
             env=env,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            stdin=asyncio.subprocess.PIPE if prepared.stdin is not None else None,
+            stdin=asyncio.subprocess.PIPE if prepared.stdin is not None else asyncio.subprocess.DEVNULL,
         )
         if prepared.stdin is not None and process.stdin is not None:
             process.stdin.write(prepared.stdin.encode("utf-8"))
