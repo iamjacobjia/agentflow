@@ -63,6 +63,8 @@ Top-level pipeline controls include:
 - `fail_fast`: skip downstream work after the first failed node
 - `node_defaults`: shared node fields merged into every node before validation
 - `agent_defaults`: agent-specific shared node fields keyed by `codex`, `claude`, or `kimi`
+- `optimizer`: optional optimizer backend, one of `codex`, `claude`, or `kimi`
+- `n_run`: optional integer; when `> 1`, runs optimization rounds before execution
 
 `node_defaults` is the pipeline-wide baseline. `agent_defaults` is the agent-specific override layer. Explicit node values always win.
 
@@ -84,6 +86,19 @@ DAG(
     },
 )
 ```
+
+## Graph optimization rounds
+
+Set top-level `optimizer` and `n_run` to run optimization rounds over the graph before execution. When `n_run > 1`, AgentFlow runs per-round optimization behavior and writes artifacts under `.agentflow/runs/<run_id>/optimization/round-XXX/`:
+
+- `pipeline.original.py`
+- `pipeline.edited.py`
+- `graph_report.json`
+- `optimizer-prompt.txt`
+- `optimizer-result.json`
+- `optimizer-validation.json`
+
+Validation safeguards ensure the edited pipeline still loads and matches the pipeline schema. These checks only validate loader and schema correctness; they do not guarantee semantic improvement or better runtime results.
 
 ## Fan-out and merge
 

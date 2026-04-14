@@ -146,6 +146,29 @@ with Graph("campaign", scratchboard=True) as g:
 | `ec2_remote.py` | Run codex on a remote EC2 instance |
 | `ecs_fargate.py` | Run codex on ECS Fargate |
 
+## Graph Optimization Rounds
+
+Run multiple optimization rounds over your graph with top-level `optimizer` and `n_run`. Use this when you want AgentFlow to let the optimizer rewrite the graph between rounds; the validation step only checks that the edited pipeline loads and passes schema validation, not that the edits are semantically better.
+
+Artifacts and logs for each round live under `.agentflow/runs/<run_id>/optimization/round-XXX/`.
+
+```python
+from agentflow import Graph, codex
+
+with Graph(
+    "optimization-demo",
+    optimizer="codex",
+    n_run=2,
+    concurrency=2,
+) as g:
+    plan = codex(task_id="plan", prompt="Outline the tasks required to finish the ticket.")
+    review = codex(task_id="review", prompt="Review the plan for missing steps or risks.")
+    summary = codex(task_id="summary", prompt="Summarize the approved plan and next actions.")
+    plan >> review >> summary
+
+print(g.to_json())
+```
+
 ## CLI
 
 ```bash

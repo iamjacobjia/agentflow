@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 from agentflow.loader import load_pipeline_from_data, load_pipeline_from_path, load_pipeline_from_text
 
@@ -420,3 +421,26 @@ def test_load_pipeline_from_text_expands_batched_fanout_before_resolving_relativ
     assert pipeline.node_map["batch_merge_1"].depends_on == ["fuzz_2", "fuzz_3"]
     assert pipeline.node_map["batch_merge_2"].depends_on == ["fuzz_4"]
 
+
+def test_load_graph_optimization_rounds_example():
+    repo_root = Path(__file__).resolve().parents[1]
+    example_path = repo_root / "examples" / "graph_optimization_rounds.py"
+
+    pipeline = load_pipeline_from_path(example_path)
+
+    assert pipeline.optimizer == "codex"
+    assert pipeline.n_run == 2
+    assert pipeline.uses_graph_optimizer is True
+    assert set(pipeline.node_map) == {"plan", "review", "summary"}
+    assert len(pipeline.nodes) == 3
+    assert pipeline.node_map["plan"].agent == "codex"
+    assert pipeline.node_map["review"].agent == "codex"
+    assert pipeline.node_map["summary"].agent == "codex"
+    assert pipeline.node_map["plan"].provider.name == "openai-custom"
+    assert pipeline.node_map["review"].provider.name == "openai-custom"
+    assert pipeline.node_map["summary"].provider.name == "openai-custom"
+    assert pipeline.node_map["plan"].repo_instructions_mode == "ignore"
+    assert pipeline.node_map["review"].repo_instructions_mode == "ignore"
+    assert pipeline.node_map["summary"].repo_instructions_mode == "ignore"
+    assert pipeline.node_map["review"].depends_on == ["plan"]
+    assert pipeline.node_map["summary"].depends_on == ["review"]

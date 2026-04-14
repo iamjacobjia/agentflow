@@ -12,6 +12,22 @@ make test
 
 That shortcut uses the same interpreter resolution as the other repo-local helpers: `.venv/bin/python` when the repo virtualenv exists, otherwise `python3`. Run `make python` when you want to confirm which interpreter those shortcuts will use on your machine.
 
+## Graph Optimization Verification
+
+For maintainer checks of graph optimization rounds, run the focused tests using the repo virtualenv when available:
+
+```bash
+.venv/bin/python -m pytest tests/test_loader.py tests/test_dsl.py tests/test_graph_optimizer.py -q
+```
+
+Then run a real smoke example with the AgentFlow CLI and capture the summary output:
+
+```bash
+.venv/bin/python -m agentflow run examples/graph_optimization_rounds.py --output summary
+```
+
+Inspect the generated artifacts under `.agentflow/runs/<run_id>/optimization/round-XXX/`, especially `pipeline.original.py`, `pipeline.edited.py`, `graph_report.json`, `optimizer-prompt.txt`, `optimizer-result.json`, and `optimizer-validation.json`. Those validation files confirm the edited pipeline still loads and passes schema validation, but they do not imply the edits are semantically better.
+
 Run the browser suite:
 
 ```bash
@@ -61,4 +77,3 @@ agentflow doctor
 When `codex` or `claude` are already on `PATH`, the doctor summary now includes the resolved executable path and `--version` output to make local CLI mismatches easier to spot. Use `agentflow doctor --output json-summary` when you want the compact machine-readable summary payload that matches the other orchestration commands, or `--output json` when you need each check's full `context`.
 
 The bundled smoke pipeline bootstraps the `kimi` shell helper inside both local nodes, so you do not need to wrap the entire `agentflow smoke` command in `bash -lic`. If you want to run a custom smoke pipeline instead, pass its path explicitly with `agentflow smoke path/to/pipeline.yaml`, or run it directly with `agentflow run path/to/pipeline.yaml` and keep the same `auto` preflight behavior for bundled and Kimi-bootstrapped local smoke pipelines. `run` now mirrors `smoke` by defaulting to the compact summary on an interactive terminal while still falling back to full JSON when stdout is redirected. Use `--preflight always` for other custom pipelines that still need those checks; forced preflight still follows the agents and bootstrap that your pipeline actually uses. Use `--preflight never` to skip preflight even for the bundled example. Add `--output json-summary` when you want a concise machine-readable result, or `--output json` when you want the full persisted run record instead of the compact summary.
-

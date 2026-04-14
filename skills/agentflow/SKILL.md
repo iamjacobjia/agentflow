@@ -12,7 +12,12 @@ Build multi-agent pipelines where codex, claude, and kimi work together in depen
 ```python
 from agentflow import Graph, codex, claude
 
-with Graph("review-pipeline", concurrency=3) as g:
+with Graph(
+    "review-pipeline",
+    concurrency=3,
+    optimizer="codex",
+    n_run=2,
+) as g:
     plan = codex(task_id="plan", prompt="Plan the work.", tools="read_only")
     impl = claude(task_id="impl", prompt="Implement:\n{{ nodes.plan.output }}", tools="read_write")
     review = codex(task_id="review", prompt="Review:\n{{ nodes.impl.output }}")
@@ -22,6 +27,8 @@ print(g.to_json())
 ```
 
 Run: `agentflow run pipeline.py`
+
+Setting `optimizer` and `n_run` like this runs graph optimization between rounds, so Codex can rewrite the graph and the runtime can verify that the edited pipeline still loads and matches schema before the next round runs.
 
 ## Imports
 
@@ -240,6 +247,44 @@ Graph("name",
     node_defaults={...},     # defaults for all nodes
     agent_defaults={...},    # per-agent defaults
 )
+```
+
+Add optimizer controls when you want AgentFlow to rewrite the graph before execution:
+
+- `optimizer`: the interactive agent (one of `codex`, `claude`, `kimi`) that rewrites the graph for the next round.
+- `n_run`: total number of graph rounds to execute; set it to `2` or higher to enable optimization rounds before the final run.
+
+## Graph Optimization Rounds
+
+Use top-level `optimizer` and `n_run` to run optimization rounds on the pipeline graph before execution.
+Supported optimizers: `codex`, `claude`, `kimi`.
+Set `n_run > 1` to enable per-round optimization behavior.
+
+Artifacts and logs are written under `.agentflow/runs/<run_id>/optimization/round-XXX/`:
+- `pipeline.original.py`
+- `pipeline.edited.py`
+- `graph_report.json`
+- `optimizer-prompt.txt`
+- `optimizer-result.json`
+- `optimizer-validation.json`
+
+Example pipeline with optimizer rounds:
+
+```python
+from agentflow import Graph, codex
+
+with Graph(
+    "optimization-demo",
+    optimizer="codex",
+    n_run=2,
+    concurrency=2,
+) as g:
+    plan = codex(task_id="plan", prompt="Outline the tasks in the ticket.")
+    review = codex(task_id="review", prompt="Review the plan for missing steps.")
+    summary = codex(task_id="summary", prompt="Summarize approved next actions.")
+    plan >> review >> summary
+
+print(g.to_json())
 ```
 
 ## CLI

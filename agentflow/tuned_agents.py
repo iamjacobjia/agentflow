@@ -323,6 +323,8 @@ def _app_root() -> Path:
 
 
 def _execution_paths(cwd: Path, runtime_dir: Path) -> ExecutionPaths:
+    cwd = cwd.resolve()
+    runtime_dir = runtime_dir.resolve()
     ensure_dir(runtime_dir)
     return ExecutionPaths(
         host_workdir=cwd,
@@ -343,14 +345,19 @@ def _materialize_runtime_files(prepared: PreparedExecution, runtime_dir: Path) -
 def _run_prepared(prepared: PreparedExecution) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     env.update(prepared.env)
-    return subprocess.run(
-        prepared.command,
-        cwd=prepared.cwd,
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    run_kwargs: dict[str, object] = {
+        "cwd": prepared.cwd,
+        "env": env,
+        "capture_output": True,
+        "text": True,
+        "check": False,
+    }
+    if prepared.stdin is None:
+        run_kwargs["stdin"] = subprocess.DEVNULL
+    else:
+        run_kwargs["stdin"] = subprocess.PIPE
+        run_kwargs["input"] = prepared.stdin
+    return subprocess.run(prepared.command, **run_kwargs)
 
 
 def _parse_agent_output(agent: AgentKind, node_id: str, stdout: str) -> str:
@@ -377,14 +384,32 @@ def _run_optimizer(
     runtime_dir: Path,
     env: dict[str, str],
 ) -> CommandExecution:
+    normalized_env = dict(env)
+    ambient_openai_base_url = (
+        normalized_env.get("OPENAI_BASE_URL")
+        or normalized_env.get("AGENTFLOW_OPENAI_BASE_URL")
+        or os.environ.get("OPENAI_BASE_URL")
+        or os.environ.get("AGENTFLOW_OPENAI_BASE_URL")
+    )
+    provider: dict[str, str] | None = None
+    if optimizer == AgentKind.CODEX and ambient_openai_base_url:
+        normalized_env.setdefault("OPENAI_BASE_URL", ambient_openai_base_url)
+        provider = {
+            "name": "openai-custom",
+            "base_url": ambient_openai_base_url,
+            "api_key_env": "OPENAI_API_KEY",
+            "wire_api": "responses",
+        }
     node = NodeSpec.model_validate(
         {
             "id": "optimizer",
             "agent": optimizer.value,
             "prompt": prompt,
             "tools": "read_write",
+            "provider": provider,
+            "repo_instructions_mode": "ignore",
             "target": {"kind": "local", "cwd": str(repo_dir)},
-            "env": env,
+            "env": normalized_env,
         }
     )
     adapter = default_adapter_registry.get(optimizer)
