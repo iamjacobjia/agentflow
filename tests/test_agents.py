@@ -82,6 +82,24 @@ def test_codex_adapter_suppresses_unstable_feature_warning(tmp_path):
     assert 'suppress_unstable_features_warning=true' in prepared.command
 
 
+def test_codex_adapter_allows_env_override_for_sandbox_mode(tmp_path):
+    node = NodeSpec.model_validate(
+        {
+            "id": "plan",
+            "agent": "codex",
+            "prompt": "Plan",
+            "env": {"AGENTFLOW_CODEX_SANDBOX_MODE": "danger-full-access"},
+        }
+    )
+
+    prepared = CodexAdapter().prepare(node, "Plan", _paths(tmp_path))
+
+    assert "--sandbox" in prepared.command
+    sandbox_index = prepared.command.index("--sandbox")
+    assert prepared.command[sandbox_index + 1] == "danger-full-access"
+    assert "AGENTFLOW_CODEX_SANDBOX_MODE" not in prepared.env
+
+
 def test_codex_adapter_does_not_force_runtime_codex_home_for_model_only_nodes(tmp_path):
     node = NodeSpec.model_validate(
         {

@@ -61,6 +61,53 @@ agentflow run examples/pipeline.yaml
 
 On a terminal, `run` and `inspect` default to a compact summary. When stdout is redirected, they fall back to JSON-oriented output. You can always force a format with `--output`.
 
+## Tuned Agents And Evolution
+
+PR #11 adds a local tuned-agent workflow:
+
+1. Run a pipeline that contains at least one `codex` node and completes with trace artifacts under `.agentflow/runs/<run_id>/artifacts/<node_id>/trace.jsonl`.
+2. Evolve a tuned agent from that run:
+
+```bash
+python -m agentflow evolve <run_id> -n <node_id> --target codex --profile codex --optimizer codex
+```
+
+3. Inspect the local tuned-agent registry:
+
+```bash
+python -m agentflow tuned-agents
+python -m agentflow tuned-agent codex_tuned --output json
+```
+
+The default Codex profile lives at `agent_tuner/codex.yaml`. It clones `https://github.com/openai/codex.git`, applies the optimizer agent to the cloned repo, then runs:
+
+- `cargo build -p codex-cli`
+- `cargo test -p codex-cli --lib && cargo test -p codex-models-manager --lib && cargo test -p codex-tools`
+- `{executable} --help >/dev/null`
+
+Generated versions are stored under `.agentflow/tuned_agents/<name>/versions/<version>/`.
+
+### Requirements
+
+- The pipeline `working_dir` used for the source run must point at the workspace that contains `agent_tuner/` and `.agentflow/`.
+- The source run must include Codex trace artifacts.
+- The local machine must be able to clone the profile `repo_url`.
+- The local machine must have the build toolchain required by the profile. The bundled Codex profile requires Rust and `cargo`.
+
+### Local Target Limitation
+
+Tuned agents currently resolve only for local targets. If a node uses `agent: codex_tuned`, its execution target must remain `local`.
+
+### External Sandbox Note
+
+If Codex itself is running inside an externally sandboxed environment and its own shell sandbox fails to start, set:
+
+```bash
+AGENTFLOW_CODEX_SANDBOX_MODE=danger-full-access
+```
+
+You can pass that override on the source node via `env`, or in the tuner profile `env:` block so the optimizer and generated tuned agent inherit it.
+
 ## Smoke
 
 Run the bundled local smoke check:

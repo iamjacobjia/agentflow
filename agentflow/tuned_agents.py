@@ -521,12 +521,16 @@ def _resolved_executable_path(config: TunerConfig, repo_dir: Path) -> str:
 def _optimizer_prompt(
     resolved_config: ResolvedTunerConfig,
     *,
-    repo_dir: Path,
+    repo_root: Path,
+    repo_workdir: Path,
     traces_dir: Path,
     source_nodes: list[str],
     previous_failure: str | None,
 ) -> str:
     tunable_surfaces_section = _render_tunable_surfaces(resolved_config.config)
+    workdir_section = ""
+    if repo_workdir != repo_root:
+        workdir_section = f"Build/test workdir: {repo_workdir}\n"
     failure_section = ""
     if previous_failure:
         failure_section = (
@@ -536,7 +540,8 @@ def _optimizer_prompt(
     return (
         f"You are evolving the `{resolved_config.agent_name}` agent profile.\n"
         f"Base agent type: {resolved_config.config.base_agent.value}\n"
-        f"Clone location: {repo_dir}\n"
+        f"Clone root: {repo_root}\n"
+        f"{workdir_section}"
         f"Copied trace directory: {traces_dir}\n"
         f"Source trace nodes: {', '.join(source_nodes)}\n"
         f"Tuner config: {resolved_config.path}\n\n"
@@ -547,6 +552,11 @@ def _optimizer_prompt(
         "Requirements:\n"
         "- Review carefully for regressions and obvious edge cases before finishing.\n"
         "- Use the copied traces as primary context for what to improve.\n"
+        "- Treat this as a direct implementation task, not a design exercise.\n"
+        "- Do not write design docs, implementation plans, or other planning artifacts.\n"
+        "- Do not wait for user confirmation, brainstorming approval, or review checkpoints before editing.\n"
+        "- Ignore installed process skills such as brainstorming, writing-plans, systematic-debugging, and test-driven-development; the outer harness is already handling planning, debugging discipline, and verification.\n"
+        "- Do not survey every tunable surface. Start from the trace evidence and inspect only the files needed for the smallest coherent fix.\n"
         "- If the evolution brief calls for it, you may change system prompts, developer instructions, prompt templates, tool definitions, tool registration, tool descriptions, and related agent-behavior configuration.\n"
         "- Modify only files under the cloned repo.\n"
         "- You may run lightweight inspections or focused tests if they help validate the change, but do not run the configured build or smoke commands yourself; the outer harness will run build, test, and smoke after you finish editing.\n"
@@ -560,7 +570,7 @@ def _render_tunable_surfaces(config: TunerConfig) -> str:
 
     lines = [
         "Known tunable surfaces and implementing files",
-        "(all paths are relative to the clone location above):",
+        "(all paths are relative to the clone root above):",
     ]
     for surface in config.tunable_surfaces:
         lines.append(f"- {surface.name}")
@@ -668,7 +678,8 @@ def run_evolution_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
         attempt_dir = ensure_dir(attempt_root / f"attempt-{attempt_number}")
         prompt = _optimizer_prompt(
             resolved_config,
-            repo_dir=repo_workdir,
+            repo_root=repo_dir,
+            repo_workdir=repo_workdir,
             traces_dir=traces_dir,
             source_nodes=request.source_nodes,
             previous_failure=failure_summary,
@@ -678,7 +689,7 @@ def run_evolution_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
         optimizer_result = _run_optimizer(
             optimizer_kind,
             prompt=prompt,
-            repo_dir=repo_workdir,
+            repo_dir=repo_dir,
             runtime_dir=attempt_dir / "optimizer-runtime",
             env=env,
         )
